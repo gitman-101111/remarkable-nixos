@@ -35,7 +35,7 @@ your config       your user + SSH key + the vendor blobs extracted from your
   (private)       own unit. Blobs never ship in any public repo.
 ```
 
-## Usage (planned)
+## Usage
 
 ```nix
 {
@@ -103,13 +103,6 @@ enough to boot and log in.
 - An aarch64 builder (native, or x86_64 with `boot.binfmt.emulatedSystems`).
 - The vendor recovery path as an unbrick fallback —
   [`docs/recovery.md`](https://github.com/gitman-101111/chiappa/blob/main/docs/recovery.md).
-
-## Install flow (planned)
-
-1. Build the flashable rootfs image (kernel + closure + FIT baked in).
-2. Flash it over SDP (the boot-ROM USB download mode) with `uuu` — scripts in
-   the hardware layer's `recovery/`.
-3. Boot. The persistent data partition provisions itself on first boot.
 
 ## Adding a device
 
