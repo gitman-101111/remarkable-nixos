@@ -113,3 +113,7 @@ See [`devices/README.md`](devices/README.md).
 Built on the [`chiappa`](https://github.com/gitman-101111/chiappa)
 hardware-layer project. Community effort to keep this genuinely-nice hardware
 open.
+
+## License
+
+[MIT](LICENSE).
