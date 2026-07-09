@@ -1,0 +1,38 @@
+# chiappa-nixos eMMC (mmcblk0) partition layout — reMarkable Paper Pro Move.
+#
+# Apply with sfdisk from an environment where NONE of mmcblk0's data partitions
+# are mounted/in use (a RAM rescue / initrd, or SDP — see docs/partitioning.md):
+#
+#     sfdisk --label gpt /dev/mmcblk0 < partition-layout.sfdisk
+#
+# This rewrites ONLY the GPT of the user-data area. It does NOT touch the eMMC
+# hardware boot partitions (mmcblk0boot0 / mmcblk0boot1) that hold imx-boot /
+# U-Boot — the boot chain is unaffected.
+#
+# Captured from a working device (64 GB eMMC, 122314752 total 512-byte sectors).
+# The vendor ships ~4 GB A/B roots + a dm-crypt swap (p4) + encrypted /home (p5);
+# this grows the roots to 8 GB, drops the swap, and makes /home the remainder on
+# p4 (there is no p5). See docs/partitioning.md for rationale + the full recipe.
+#
+# CRITICAL — the partition NAMES are load-bearing, do not change them:
+#   - "root_a" : U-Boot's mmcargs injects dm-mod.waitfor="PARTLABEL=root_a";
+#                the kernel blocks boot until that GPT name appears.
+#   - "root_a"/"root_b"/"home" are also how NixOS finds them (by-partlabel /
+#     by-label). Slot A = p2/root_a, slot B = p3/root_b, /home = p4.
+#
+# start/size are in 512-byte sectors. Contiguous, filling the disk:
+#   p1 100 MiB · p2 8 GiB · p3 8 GiB · p4 ~42.2 GiB (rest). type = Linux fs.
+# Partition + disk UUIDs are intentionally omitted so sfdisk generates fresh
+# ones per device (only the NAMEs must match).
+
+label: gpt
+unit: sectors
+# first-lba: 34 matches the vendor's tight GPT (p1 starts at the first usable
+# sector, no 1 MiB alignment gap). Required, or sfdisk's default first-usable-LBA
+# collides with p1 @ 34 ("Sector 34 already used").
+first-lba: 34
+
+start=          34, size=      204800, type=0FC63DAF-8483-4772-8E79-3D69D8477DE4, name="data"
+start=      204834, size=    16777216, type=0FC63DAF-8483-4772-8E79-3D69D8477DE4, name="root_a"
+start=    16982050, size=    16777216, type=0FC63DAF-8483-4772-8E79-3D69D8477DE4, name="root_b"
+start=    33759266, size=    88555453, type=0FC63DAF-8483-4772-8E79-3D69D8477DE4, name="home"
