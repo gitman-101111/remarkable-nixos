@@ -45,6 +45,8 @@
     ./power.nix
     ./touch.nix
     ./koreader.nix
+    ./apps.nix
+    ./lock.nix
     ./persistence.nix
   ];
 }

@@ -17,18 +17,10 @@
 }: let
   cfg = config.remarkable.eink;
   device = config.remarkable.device;
-  einkSrc = "${device.hardwareLayer}/eink";
   geometry = "${toString device.panel.width}x${toString device.panel.height}";
 
   # The rm2fb "show a full-screen frame" client — libc only, no Qt/vendor libs.
-  einkShow = pkgs.stdenv.mkDerivation {
-    pname = "remarkable-eink-show";
-    version = "1";
-    src = "${einkSrc}/src";
-    dontConfigure = true;
-    buildPhase = "$CC -O2 -o chiappa-eink-show chiappa-eink-show.c";
-    installPhase = "install -Dm755 chiappa-eink-show $out/bin/eink-show";
-  };
+  einkShow = cfg.showPackage;
 
   # Convert a PNG → headerless RGB888 raw sized to the panel, alpha flattened
   # onto white. Built on the host (raw pixels are arch-neutral).

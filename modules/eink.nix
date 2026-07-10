@@ -117,6 +117,20 @@ in {
       default = einkbridge;
       description = "The built einkbridge package.";
     };
+
+    showPackage = lib.mkOption {
+      type = lib.types.package;
+      readOnly = true;
+      default = pkgs.stdenv.mkDerivation {
+        pname = "remarkable-eink-show";
+        version = "1";
+        src = "${einkSrc}/src";
+        dontConfigure = true;
+        buildPhase = "$CC -O2 -o chiappa-eink-show chiappa-eink-show.c";
+        installPhase = "install -Dm755 chiappa-eink-show $out/bin/eink-show";
+      };
+      description = "The rm2fb full-frame show client (lifecycle screens, app-session frame restore).";
+    };
   };
 
   config = lib.mkMerge [

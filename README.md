@@ -3,8 +3,8 @@
 Run **NixOS** on reMarkable paper tablets.
 
 A Nix flake of per-subsystem NixOS modules (boot image, kernel, stage-1 hooks,
-USB networking, e-ink, power/sleep, reader UI) driven by per-device profiles
-under [`devices/`](devices/). The reference device is the **reMarkable Paper
+USB networking, e-ink, power/sleep, reader UI, GUI apps on the panel, PIN
+lock) driven by per-device profiles under [`devices/`](devices/). The reference device is the **reMarkable Paper
 Pro Move** (codename *chiappa*, NXP i.MX 93), extracted from a daily-driven
 system; other devices — the Paper Pro (*ferrari*) being the natural next — add
 a profile beside it. Bring your own (extracted) vendor blobs and an SSH key.
@@ -67,10 +67,13 @@ recovery image, via `recovery/fetch-recovery-image.sh` +
 `firmware/extract.sh`; no running vendor OS required). Point the options at
 the results:
 
+One run of chiappa's `firmware/extract-vendor-data.sh` against the recovery
+rootfs image produces all of these:
+
 | Option | What to extract |
 |--------|-----------------|
-| `remarkable.boot.ahabHeader` | 8 KB AHAB header: `dd if=vendor-fitImage.ahab bs=8192 count=1` |
-| `remarkable.boot.vendorDtb` | your PCBA revision's DTB (from the vendor FIT/recovery image) |
+| `remarkable.boot.ahabHeader` | 8 KB AHAB header (`boot/ahab-header.bin`) |
+| `remarkable.boot.vendorDtb` | your PCBA revision's DTB (`dtb/chiappa-rev-<x>.dtb`; F–K are byte-identical) |
 | `remarkable.eink.vendorRuntime` | the vendor Qt + `libqsgepaper` e-ink runtime bundle |
 | `remarkable.eink.waveforms` | panel waveform/colortable tables (`/usr/share/remarkable`) |
 | `remarkable.eink.screens` | (optional) vendor lifecycle art PNGs |
@@ -103,6 +106,42 @@ enough to boot and log in.
 - An aarch64 builder (native, or x86_64 with `boot.binfmt.emulatedSystems`).
 - The vendor recovery path as an unbrick fallback —
   [`docs/recovery.md`](https://github.com/gitman-101111/chiappa/blob/main/docs/recovery.md).
+
+## Apps on the panel
+
+Any Wayland app can run full-screen on the e-ink panel, launched from an
+"Apps" menu inside KoReader (touch, pen, and an on-screen keyboard that rises
+on text-field focus all work; the app renders through a software sway session
+mirrored to the panel with damage-driven partial refreshes):
+
+```nix
+remarkable.apps.firefox = {
+  command = "${pkgs.firefox}/bin/firefox";
+  label = "Firefox";
+};
+```
+
+Each entry also lands on PATH as `remarkable-app-<name>`. Per-app options:
+`waveform` (2 = GC16 quality, 1 = DU speed) and `keyboardHeight`. A session
+log is written to `$XDG_RUNTIME_DIR/app-<name>.log`.
+
+## PIN lock
+
+```nix
+remarkable.lock.enable = true;
+```
+
+adds a PIN pad on boot (before the reader UI) and on every resume. Arm it
+once, on the device:
+
+```sh
+sudo remarkable-lock-setpin <digits>     # 4-12 digits; hash in /persist/lock/pin
+```
+
+No PIN set = no lock, so a fresh flash never locks you out. This is an
+**access deterrent, not encryption** — the disk stays readable over SDP or
+with physical eMMC access, and the lock gates the panel only (SSH still
+works: a forgotten PIN is `sudo rm /persist/lock/pin` away from recovery).
 
 ## Adding a device
 

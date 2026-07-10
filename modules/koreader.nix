@@ -73,6 +73,9 @@
       # Refresh the shipped userpatches into the writable patches dir each launch.
       cp -f ${cfg.userPatches}/*.lua "$KO_HOME/patches/" 2>/dev/null || true
     ''}
+    ${lib.concatMapStrings (d: ''
+      cp -f ${d}/*.lua "$KO_HOME/patches/" 2>/dev/null || true
+    '') cfg.extraPatchDirs}
     # Corrupt-cache guard: a hard power-off can damage KoReader's sqlite caches
     # (e.g. bookinfo_cache.sqlite3), and KoReader HANGS at startup reading one
     # instead of rebuilding it — blank screen, deaf to input. Quarantine any
@@ -134,6 +137,12 @@ in {
         KO_HOME/patches at startup), refreshed into the writable patches dir
         on every launch. Update-safe: survives KoReader release bumps.
       '';
+    };
+    extraPatchDirs = lib.mkOption {
+      type = lib.types.listOf lib.types.path;
+      default = [];
+      internal = true;
+      description = "Additional userpatch directories contributed by other modules (e.g. the Apps launcher menu).";
     };
   };
 
