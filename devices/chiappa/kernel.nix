@@ -101,6 +101,17 @@
       CONFIG_NFT_NAT=m
       CONFIG_NFT_MASQ=m
       CONFIG_NFT_COMPAT=m
+
+      # WireGuard (e.g. syncing books from a home NAS over the WiFi link).
+      # Not in the vendor config; CONFIG_WIREGUARD selects the crypto library
+      # primitives (curve25519/chacha20poly1305/blake2s), whose generic
+      # implementations are already present. TUN is added for userspace VPN
+      # tools too. The tunnel itself (keys, peer, allowed IPs) is per-user
+      # config, not shipped here.
+      CONFIG_WIREGUARD=m
+      CONFIG_TUN=m
+      CONFIG_CRYPTO_LIB_CURVE25519=m
+      CONFIG_CRYPTO_LIB_CHACHA20POLY1305=m
     ''
   );
 in {
