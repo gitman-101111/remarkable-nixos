@@ -8,8 +8,9 @@
 #   sudo remarkable-lock-setpin <digits>
 #
 # Lock points: boot (before the reader UI starts) and resume from suspend.
-# On resume the restored app frame can be visible for roughly one panel
-# refresh before the pad paints over it.
+# On resume the reader app is already running and repaints the panel, so the
+# lock freezes it (SIGSTOP) while the pad is up and thaws it (SIGCONT) after —
+# otherwise the app draws over the pad, leaving it invisible but still live.
 {
   config,
   lib,
@@ -18,10 +19,13 @@
 }: let
   cfg = config.remarkable.lock;
   device = config.remarkable.device;
+  systemctl = "${config.systemd.package}/bin/systemctl";
   geomEnv = ''
     export SWTFB_WIDTH=${toString device.panel.width}
     export SWTFB_HEIGHT=${toString device.panel.height}
   '';
+  freezeCmds = op:
+    lib.concatMapStrings (u: "${systemctl} kill -s ${op} ${u} 2>/dev/null || true\n") cfg.freezeUnits;
 
   pinpad = pkgs.stdenv.mkDerivation {
     pname = "swtfb-pinpad";
@@ -56,6 +60,11 @@
       [ ! -e /run/swtfb.save ] && break
       sleep 0.5
     done
+    # Freeze the reader app so it cannot repaint over the pad (a no-op at boot,
+    # where it is not yet running); always thaw, even if the pad is killed.
+    ${freezeCmds "STOP"}
+    thaw() { ${freezeCmds "CONT"} }
+    trap thaw EXIT
     # Retry transient failures (a bridge restart recreates both artifacts).
     # Exit 0 = unlocked or no PIN set; nonzero = could not run.
     for _ in 1 2 3; do
@@ -71,6 +80,12 @@ in {
       type = lib.types.str;
       default = "/persist/lock/pin";
       description = "Path of the salted PIN hash (crypt SHA-512). Absent file = lock inactive.";
+    };
+    freezeUnits = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = lib.optional config.remarkable.koreader.enable "koreader.service";
+      defaultText = lib.literalExpression ''lib.optional config.remarkable.koreader.enable "koreader.service"'';
+      description = "Systemd units SIGSTOP'd while the lock pad is shown (so the running app cannot repaint over it) and SIGCONT'd after unlock.";
     };
   };
 
