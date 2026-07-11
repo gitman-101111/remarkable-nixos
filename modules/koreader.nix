@@ -111,6 +111,83 @@
     cd "${koDir}"
     exec ./luajit reader.lua "$@"
   '';
+
+  # menuCommands → a userpatch adding shell-command entries to KoReader's menu
+  # (also the mechanism behind the Apps launcher — see apps.nix). Each
+  # command/checkedCommand becomes a shell script (no lua escaping), and the
+  # lua just os.execute()s the script path; exit-0 of the check script shows a
+  # checkmark. os.execute returns the exit status on LuaJIT (Lua 5.1). Entries
+  # with a `group` nest under a submenu of that name; others are top-level.
+  menuCmds = lib.imap0 (i: c: {
+    inherit (c) label group fullRefresh;
+    cmd = pkgs.writeShellScript "koreader-menucmd-${toString i}" c.command;
+    check =
+      if c.checkedCommand != null
+      then pkgs.writeShellScript "koreader-menucheck-${toString i}" c.checkedCommand
+      else null;
+    key = "remarkable_cmd_${toString i}";
+  }) cfg.menuCommands;
+
+  # A menu-item table literal (used both top-level and inside a submenu).
+  itemLiteral = e: ''{
+            text = ${builtins.toJSON e.label},
+            ${lib.optionalString (e.check != null) ''checked_func = function() return os.execute("${e.check}") == 0 end,''}
+            callback = function()
+                os.execute("${e.cmd}")
+                require("ui/uimanager"):setDirty("all", ${
+      if e.fullRefresh
+      then "\"full\""
+      else "\"ui\""
+    })
+            end,
+        }'';
+
+  topLevel = lib.filter (e: e.group == null) menuCmds;
+  groups = lib.imap0 (i: g: {
+    name = g;
+    key = "remarkable_group_${toString i}";
+    entries = lib.filter (e: e.group == g) menuCmds;
+  }) (lib.unique (lib.filter (g: g != null) (map (e: e.group) menuCmds)));
+
+  orderKeys = (map (e: e.key) topLevel) ++ (map (g: g.key) groups);
+  menuOrderInserts = lib.concatMapStrings (k: ''
+        if order and order.tools then table.insert(order.tools, 1, "${k}") end
+  '') orderKeys;
+
+  menuItemDefs =
+    (lib.concatMapStrings (e: ''
+        self.menu_items.${e.key} = ${itemLiteral e}
+    '')
+    topLevel)
+    + (lib.concatMapStrings (g: ''
+        self.menu_items.${g.key} = {
+            text = ${builtins.toJSON g.name},
+            sub_item_table = {
+    ${lib.concatStringsSep ",\n" (map itemLiteral g.entries)}
+            },
+        }
+    '')
+    groups);
+
+  menuCommandsPatch = pkgs.writeTextDir "3-remarkable-menu-commands.lua" ''
+    -- remarkable-nixos: shell-command menu entries (VPN toggle, the Apps
+    -- launcher, …). Each runs a script with KoReader's PATH; a checkedCommand
+    -- exit-0 shows a check; grouped entries nest under a submenu.
+    local function add(MenuClass, order)
+    ${menuOrderInserts}
+        local orig = MenuClass.setUpdateItemTable
+        MenuClass.setUpdateItemTable = function(self)
+    ${menuItemDefs}
+            return orig(self)
+        end
+    end
+    local ok_fm, fm_order = pcall(require, "ui/elements/filemanager_menu_order")
+    local ok_fmm, FileManagerMenu = pcall(require, "apps/filemanager/filemanagermenu")
+    if ok_fmm then add(FileManagerMenu, ok_fm and fm_order or nil) end
+    local ok_r_order, r_order = pcall(require, "ui/elements/reader_menu_order")
+    local ok_rm, ReaderMenu = pcall(require, "apps/reader/modules/readermenu")
+    if ok_rm then add(ReaderMenu, ok_r_order and r_order or nil) end
+  '';
 in {
   options.remarkable.koreader = {
     enable = lib.mkEnableOption "KoReader e-reader (einkbridge client)";
@@ -138,6 +215,41 @@ in {
         on every launch. Update-safe: survives KoReader release bumps.
       '';
     };
+    menuCommands = lib.mkOption {
+      type = lib.types.listOf (lib.types.submodule {
+        options = {
+          label = lib.mkOption {
+            type = lib.types.str;
+            description = "Menu entry text (in KoReader's tools/main menu).";
+          };
+          command = lib.mkOption {
+            type = lib.types.str;
+            description = "Shell command run when the entry is tapped. Runs with KoReader's PATH (systemd, networkmanager).";
+          };
+          checkedCommand = lib.mkOption {
+            type = lib.types.nullOr lib.types.str;
+            default = null;
+            description = "Shell command whose exit-0 shows a checkmark on the entry (for toggles/status), re-run on every menu draw.";
+          };
+          group = lib.mkOption {
+            type = lib.types.nullOr lib.types.str;
+            default = null;
+            description = "Submenu to place the entry under (entries sharing a group nest together); null = top-level menu entry.";
+          };
+          fullRefresh = lib.mkOption {
+            type = lib.types.bool;
+            default = false;
+            description = "Do a full-screen e-ink refresh after the command (needed when the command took over the panel, e.g. launching an app); a plain toggle leaves this false.";
+          };
+        };
+      });
+      default = [];
+      example = lib.literalExpression ''
+        [ { label = "VPN"; command = "nmcli connection up nj || nmcli connection down nj";
+            checkedCommand = "nmcli -t -f NAME connection show --active | grep -qx nj"; } ]
+      '';
+      description = "Shell-command entries added to KoReader's menu — e.g. a VPN toggle. checkedCommand drives a checkmark for toggle/status state.";
+    };
     extraPatchDirs = lib.mkOption {
       type = lib.types.listOf lib.types.path;
       default = [];
@@ -148,6 +260,8 @@ in {
 
   config = lib.mkIf cfg.enable {
     environment.systemPackages = [launcher];
+
+    remarkable.koreader.extraPatchDirs = lib.mkIf (cfg.menuCommands != []) [menuCommandsPatch];
 
     # Running KoReader as a systemd service (no login session) means logind's
     # per-session device ACLs are NOT applied, so it can't open /dev/input/*

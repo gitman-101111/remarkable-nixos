@@ -133,46 +133,6 @@
 
   wrapperPkgs = lib.mapAttrs wrapperFor cfg;
   wrappers = lib.attrValues wrapperPkgs;
-
-  # KoReader "Apps" menu (userpatch): one entry per app, running the wrapper
-  # synchronously — KoReader stays frozen (by design) until the app exits,
-  # then repaints. ABSOLUTE paths: KoReader's service PATH is minimal and
-  # does not include the system profile.
-  menuEntries = lib.concatStringsSep ",\n" (lib.mapAttrsToList (name: app: ''
-        {
-            text = ${builtins.toJSON app.label},
-            callback = function()
-                os.execute(${builtins.toJSON "${wrapperPkgs.${name}}/bin/remarkable-app-${name}"})
-                local UIManager = require("ui/uimanager")
-                UIManager:setDirty("all", "full")
-            end,
-        }'') cfg);
-
-  appsMenuPatch = pkgs.writeTextDir "2-remarkable-apps-menu.lua" ''
-    -- remarkable-nixos: adds an "Apps" menu with entries that hand the panel
-    -- to a Wayland app session until it exits.
-    local function add_apps_menu(MenuClass, order)
-        if order and order.tools then
-            table.insert(order.tools, 1, "remarkable_apps")
-        end
-        local orig = MenuClass.setUpdateItemTable
-        MenuClass.setUpdateItemTable = function(self)
-            self.menu_items.remarkable_apps = {
-                text = "Apps",
-                sub_item_table = {
-    ${menuEntries}
-                },
-            }
-            return orig(self)
-        end
-    end
-    local ok_fm, fm_order = pcall(require, "ui/elements/filemanager_menu_order")
-    local ok_fmm, FileManagerMenu = pcall(require, "apps/filemanager/filemanagermenu")
-    if ok_fmm then add_apps_menu(FileManagerMenu, ok_fm and fm_order or nil) end
-    local ok_r_order, r_order = pcall(require, "ui/elements/reader_menu_order")
-    local ok_rm, ReaderMenu = pcall(require, "apps/reader/modules/readermenu")
-    if ok_rm then add_apps_menu(ReaderMenu, ok_r_order and r_order or nil) end
-  '';
 in {
   options.remarkable.apps = lib.mkOption {
     type = lib.types.attrsOf (lib.types.submodule {
@@ -219,7 +179,17 @@ in {
     # the way `loginctl enable-linger` does it: a marker file logind reads.
     systemd.tmpfiles.rules = ["f /var/lib/systemd/linger/${primaryUser} 0644 root root -"];
 
-    remarkable.koreader.extraPatchDirs =
-      lib.mkIf config.remarkable.koreader.enable [appsMenuPatch];
+    # The "Apps" menu is just menuCommands entries grouped under "Apps": each
+    # runs its wrapper synchronously (KoReader stays frozen until the app
+    # exits) and full-refreshes on return (the app took over the panel).
+    remarkable.koreader.menuCommands = lib.mkIf config.remarkable.koreader.enable (
+      lib.mapAttrsToList (name: app: {
+        inherit (app) label;
+        command = "${wrapperPkgs.${name}}/bin/remarkable-app-${name}";
+        group = "Apps";
+        fullRefresh = true;
+      })
+      cfg
+    );
   };
 }
