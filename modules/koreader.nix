@@ -69,6 +69,13 @@
     # (KoReader only mkdirs the final component).
     export KO_HOME="$HOME/.local/share/koreader"
     mkdir -p "$HOME/.local/share" "$KO_HOME/patches"
+    # KO_HOME lives on /persist and survives A/B reflashes, so patches shipped by
+    # a PREVIOUS generation linger here forever (KoReader never prunes). A patch
+    # we've since renamed or dropped (e.g. the old per-feature menu patches folded
+    # into 2-remarkable-menu-commands.lua) would keep loading and shadow the new
+    # one. Make the patch set declarative: wipe it, then re-copy the current
+    # generation's patches so KO_HOME/patches always matches the running config.
+    rm -f "$KO_HOME/patches"/*.lua 2>/dev/null || true
     ${lib.optionalString (cfg.userPatches != null) ''
       # Refresh the shipped userpatches into the writable patches dir each launch.
       cp -f ${cfg.userPatches}/*.lua "$KO_HOME/patches/" 2>/dev/null || true
@@ -275,7 +282,11 @@
     logger.info("[nmcli-wifi] NetworkMgr overridden to use NetworkManager (nmcli)")
   '';
 
-  menuCommandsPatch = pkgs.writeTextDir "3-remarkable-menu-commands.lua" ''
+  # Priority 2 ("late") — applied once UIManager is ready, which is when the
+  # menu tables exist to hook. KoReader ONLY runs applyPatches for priorities
+  # 0/1/2/8 (early_once/early/late/before_exit); 3–7 are reserved and NEVER
+  # applied, so a "3-…" name would be silently dead. Keep this at 2.
+  menuCommandsPatch = pkgs.writeTextDir "2-remarkable-menu-commands.lua" ''
     -- remarkable-nixos: shell-command menu entries (VPN toggle, the Apps
     -- launcher, …). Each runs a script with KoReader's PATH; a checkedCommand
     -- exit-0 shows a check; grouped entries nest under a submenu.
