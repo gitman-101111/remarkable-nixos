@@ -176,6 +176,23 @@
     '')
     groups);
 
+  # Neutralize KoReader's built-in OTA updater. This build ships from the
+  # read-only Nix store, so the in-app updater can't overwrite the install —
+  # and real updates come from a Nix rebuild + redeploy, not from KoReader. The
+  # reMarkable device profile sets hasOTAUpdates=true, which is what makes the
+  # "Update" menu appear (common_info_menu_table.lua only adds `ota_update` when
+  # Device:hasOTAUpdates() is true, at menu-module load time). Forcing it false
+  # at the "early" priority — before that module is first required — drops the
+  # entry entirely. Shipped unconditionally: every Nix-managed install wants it.
+  otaPatch = pkgs.writeTextDir "1-remarkable-disable-ota.lua" ''
+    -- remarkable-nixos: read-only Nix-store install → the in-app OTA updater
+    -- can't apply updates (those come from a Nix rebuild + redeploy). Force
+    -- hasOTAUpdates() false before the menu tables load so the "Update" entry
+    -- never appears.
+    local Device = require("device")
+    Device.hasOTAUpdates = function() return false end
+  '';
+
   # WiFi driver override: KoReader's reMarkable profile assumes wpa_supplicant,
   # but this stack runs NetworkManager, so its WiFi menu is inert without this
   # (overrides NetworkMgr's device primitives to shell out to nmcli). Shipped
@@ -379,7 +396,8 @@ in {
     environment.systemPackages = [launcher];
 
     remarkable.koreader.extraPatchDirs =
-      (lib.optional (cfg.menuCommands != []) menuCommandsPatch)
+      [otaPatch]
+      ++ (lib.optional (cfg.menuCommands != []) menuCommandsPatch)
       ++ (lib.optional config.networking.networkmanager.enable wifiPatch);
 
     # Running KoReader as a systemd service (no login session) means logind's
