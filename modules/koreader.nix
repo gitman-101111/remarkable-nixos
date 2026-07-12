@@ -180,15 +180,24 @@
   # read-only Nix store, so the in-app updater can't overwrite the install —
   # and real updates come from a Nix rebuild + redeploy, not from KoReader. The
   # reMarkable device profile sets hasOTAUpdates=true, which is what makes the
-  # "Update" menu appear (common_info_menu_table.lua only adds `ota_update` when
-  # Device:hasOTAUpdates() is true, at menu-module load time). Forcing it false
-  # at the "early" priority — before that module is first required — drops the
-  # entry entirely. Shipped unconditionally: every Nix-managed install wants it.
-  otaPatch = pkgs.writeTextDir "1-remarkable-disable-ota.lua" ''
+  # "Update" entry appear: filemanagermenu.lua rebuilds the menu with
+  # `dofile(common_info_menu_table.lua)` on every open, and that file adds
+  # `ota_update` only `if Device:hasOTAUpdates()`. Flipping it false at startup
+  # means every rebuild sees false, so the entry never appears.
+  #
+  # MUST be priority 2 (late), NOT early (1-): an early patch runs BEFORE
+  # reader.lua requires the device module, so require("device") here would load
+  # device.lua too soon — before G_reader_settings exists — and that half-load
+  # makes the real require fail fatally ("loop or previous error loading module
+  # 'device'"), crash-looping KoReader (this exact bug shipped once). At late,
+  # device is already loaded, so require returns the ready singleton and we just
+  # flip the method. Shipped unconditionally: every Nix-managed install wants it.
+  otaPatch = pkgs.writeTextDir "2-remarkable-disable-ota.lua" ''
     -- remarkable-nixos: read-only Nix-store install → the in-app OTA updater
-    -- can't apply updates (those come from a Nix rebuild + redeploy). Force
-    -- hasOTAUpdates() false before the menu tables load so the "Update" entry
-    -- never appears.
+    -- can't apply updates (those come from a Nix rebuild + redeploy). Flip
+    -- hasOTAUpdates() false so the "Update" menu entry never appears. Loaded at
+    -- the "late" priority: the device module is already required by then, so
+    -- this returns the singleton (requiring it earlier crashes KoReader).
     local Device = require("device")
     Device.hasOTAUpdates = function() return false end
   '';
