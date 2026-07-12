@@ -169,6 +169,112 @@
     '')
     groups);
 
+  # WiFi driver override: KoReader's reMarkable profile assumes wpa_supplicant,
+  # but this stack runs NetworkManager, so its WiFi menu is inert without this
+  # (overrides NetworkMgr's device primitives to shell out to nmcli). Shipped
+  # whenever NetworkManager is enabled; loaded at priority 2 so it wins over the
+  # wpa methods. Note the ''' below (an escaped '' — POSIX single-quote quoting)
+  # and ${device.wifi.interface} interpolation.
+  wifiPatch = pkgs.writeTextDir "2-nmcli-wifi.lua" ''
+    -- Drive KoReader's WiFi via NetworkManager (nmcli). KoReader's reMarkable
+    -- profile hardcodes a wpa_supplicant backend, so its WiFi menu is inert on
+    -- this stack; override NetworkMgr's device primitives to use nmcli instead.
+    local NetworkMgr = require("ui/network/manager")
+    local logger = require("logger")
+
+    local function run(cmd)
+        local h = io.popen(cmd)
+        if not h then return "" end
+        local out = h:read("*a") or ""
+        h:close()
+        return out
+    end
+    local function trim(s) return (tostring(s):gsub("^%s+", ""):gsub("%s+$", "")) end
+    -- single-quote a shell argument (SSID/password may contain anything)
+    local function sq(s) return "'" .. tostring(s):gsub("'", "'\\'''") .. "'" end
+    -- split one `nmcli -t` line, honoring `\:` (escaped colon) inside fields
+    local function terse(line)
+        local f, buf, i, n = {}, "", 1, #line
+        while i <= n do
+            local c = line:sub(i, i)
+            if c == "\\" then buf = buf .. line:sub(i + 1, i + 1); i = i + 2
+            elseif c == ":" then f[#f + 1] = buf; buf = ""; i = i + 1
+            else buf = buf .. c; i = i + 1 end
+        end
+        f[#f + 1] = buf
+        return f
+    end
+
+    function NetworkMgr:turnOnWifi(complete_callback, interactive)
+        os.execute("nmcli radio wifi on")
+        return self:reconnectOrShowNetworkMenu(complete_callback, interactive)
+    end
+
+    function NetworkMgr:turnOffWifi(complete_callback)
+        os.execute("nmcli radio wifi off")
+        if complete_callback then complete_callback() end
+    end
+
+    function NetworkMgr:isWifiOn()
+        return trim(run("nmcli radio wifi 2>/dev/null")) == "enabled"
+    end
+
+    function NetworkMgr:isConnected()
+        for line in run("nmcli -t -f DEVICE,STATE device 2>/dev/null"):gmatch("[^\n]+") do
+            local f = terse(line)
+            if f[1] == "${device.wifi.interface}" and f[2] == "connected" then return true end
+        end
+        return false
+    end
+
+    function NetworkMgr:getCurrentNetwork()
+        local name = trim((run("nmcli -t -f GENERAL.CONNECTION device show ${device.wifi.interface} 2>/dev/null")
+            :match("GENERAL.CONNECTION:(.-)\n")) or "")
+        if name == "" or name == "--" then return nil end
+        return { ssid = name, bssid = "any" }
+    end
+
+    function NetworkMgr:getNetworkList()
+        os.execute("nmcli device wifi rescan 2>/dev/null")
+        local list, seen = {}, {}
+        for line in run("nmcli -t -f IN-USE,SSID,SIGNAL,SECURITY,BSSID device wifi list 2>/dev/null"):gmatch("[^\n]+") do
+            local f = terse(line)
+            local inuse, ssid, signal, sec, bssid = f[1], f[2], f[3], f[4], f[5]
+            if ssid and ssid ~= "" and not seen[ssid] then
+                seen[ssid] = true
+                list[#list + 1] = {
+                    ssid = ssid,
+                    signal_quality = tonumber(signal) or 0,
+                    bssid = bssid or "",
+                    flags = (sec and sec ~= "" and sec ~= "--") and ("[" .. sec .. "]") or "",
+                    connected = (inuse == "*"),
+                }
+            end
+        end
+        return list
+    end
+
+    function NetworkMgr:authenticateNetwork(network)
+        local cmd = "nmcli device wifi connect " .. sq(network.ssid)
+        if network.password and #network.password > 0 then
+            cmd = cmd .. " password " .. sq(network.password)
+        end
+        local out = run(cmd .. " 2>&1")
+        if out:match("successfully activated") then return true end
+        return false, trim(out)
+    end
+
+    function NetworkMgr:disconnectNetwork(network)
+        os.execute("nmcli device disconnect ${device.wifi.interface} 2>/dev/null")
+    end
+
+    -- NetworkManager owns DHCP (done on connect), so these are no-ops.
+    function NetworkMgr:obtainIP() end
+    function NetworkMgr:releaseIP() end
+
+    logger.info("[nmcli-wifi] NetworkMgr overridden to use NetworkManager (nmcli)")
+  '';
+
   menuCommandsPatch = pkgs.writeTextDir "3-remarkable-menu-commands.lua" ''
     -- remarkable-nixos: shell-command menu entries (VPN toggle, the Apps
     -- launcher, …). Each runs a script with KoReader's PATH; a checkedCommand
@@ -261,7 +367,9 @@ in {
   config = lib.mkIf cfg.enable {
     environment.systemPackages = [launcher];
 
-    remarkable.koreader.extraPatchDirs = lib.mkIf (cfg.menuCommands != []) [menuCommandsPatch];
+    remarkable.koreader.extraPatchDirs =
+      (lib.optional (cfg.menuCommands != []) menuCommandsPatch)
+      ++ (lib.optional config.networking.networkmanager.enable wifiPatch);
 
     # Running KoReader as a systemd service (no login session) means logind's
     # per-session device ACLs are NOT applied, so it can't open /dev/input/*
