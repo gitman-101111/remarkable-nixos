@@ -97,7 +97,8 @@
       fi
     done
     export LC_ALL="en_US.UTF-8"
-    export STARDICT_DATA_DIR="data/dict"
+    # STARDICT_DATA_DIR left unset: KoReader then uses KO_HOME/data/dict, which it
+    # creates and can write. A value is taken relative to cwd (the read-only store).
     export KO_DONT_GRAB_INPUT=1     # don't EVIOCGRAB — matches reMarkable
     export KO_DONT_SET_DEPTH=1      # keep einkbridge's 16bpp RGB565 (color)
     unset KO_USE_QTFB               # → mxcfb backend (the shim path)
@@ -200,6 +201,15 @@
     -- this returns the singleton (requiring it earlier crashes KoReader).
     local Device = require("device")
     Device.hasOTAUpdates = function() return false end
+  '';
+
+  # KoReader's file manager execl()s /bin/mv and /bin/cp (filemanager.lua, the
+  # non-Android branch) for rename/copy/paste. Neither exists on NixOS and execl
+  # does not search PATH, so those operations fail. Repoint both at coreutils.
+  fileBinsPatch = pkgs.writeTextDir "2-remarkable-file-bins.lua" ''
+    local FileManager = require("apps/filemanager/filemanager")
+    FileManager.mv_bin = "${pkgs.coreutils}/bin/mv"
+    FileManager.cp_bin = "${pkgs.coreutils}/bin/cp"
   '';
 
   # WiFi driver override: KoReader's reMarkable profile assumes wpa_supplicant,
@@ -405,7 +415,7 @@ in {
     environment.systemPackages = [launcher];
 
     remarkable.koreader.extraPatchDirs =
-      [otaPatch]
+      [otaPatch fileBinsPatch]
       ++ (lib.optional (cfg.menuCommands != []) menuCommandsPatch)
       ++ (lib.optional config.networking.networkmanager.enable wifiPatch);
 
