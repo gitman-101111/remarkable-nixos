@@ -29,11 +29,28 @@
 
   lowBattShow = config.remarkable.eink.lowBatteryShow;
 
+  # Watchdog needs both the charger power_supply and a renegotiation hook.
+  hasChargerWatchdog =
+    device.charger.sysfsName != null && device.charger.renegotiateSysfsPath != null;
+
   powerd = pkgs.writeShellScript "remarkable-powerd" ''
     BAT=/sys/class/power_supply/${device.battery.sysfsName}
+    ${lib.optionalString hasChargerWatchdog ''
+      CHG=/sys/class/power_supply/${device.charger.sysfsName}
+    ''}
     while :; do
       soc=$(cat "$BAT/capacity" 2>/dev/null || echo 100)
       status=$(cat "$BAT/status" 2>/dev/null || echo Unknown)
+      ${lib.optionalString hasChargerWatchdog ''
+        # Recover a stranded input-current limit: charger online but limit at
+        # the 100 mA floor, or discharging on live input → renegotiate.
+        if [ "$(cat "$CHG/online" 2>/dev/null)" = "1" ]; then
+          cur=$(cat "$CHG/current_max" 2>/dev/null || echo 0)
+          if [ "$cur" -le 100000 ] || [ "$status" = "Discharging" ]; then
+            echo 1 > ${device.charger.renegotiateSysfsPath} 2>/dev/null || true
+          fi
+        fi
+      ''}
       if [ "$soc" -le ${toString cfg.lowSoc} ] && [ "$status" = "Discharging" ]; then
         ${lib.optionalString (lowBattShow != null) ''
           # Show the battery-empty frame, then let it render before we go.
@@ -53,6 +70,11 @@ in {
       type = lib.types.int;
       default = 8;
       description = "Battery %: graceful poweroff at or below this while discharging (ahead of the fuel gauge's hardware cliff).";
+    };
+    penChargeMinSoc = lib.mkOption {
+      type = lib.types.nullOr lib.types.int;
+      default = null;
+      description = "Battery % at or above which the NFC pen charger stays powered through suspend (it always stays powered when on external power; ~8 mA suspend cost). null = only on external power.";
     };
   };
 
@@ -108,6 +130,76 @@ in {
         };
       };
     }
+
+    # Power the WiFi/BT combo chip down across suspend (it otherwise stays
+    # powered on SDIO). BT module out first, then WiFi; on resume WiFi loads
+    # immediately and BT reloads in the background once the interface exists
+    # (the combo chip's FW download races WiFi init otherwise).
+    (lib.mkIf (device.wifi.kernelModules != []) {
+      powerManagement.powerDownCommands = ''
+        ${lib.optionalString (device.bluetooth.kernelModule != null) ''
+          ${pkgs.kmod}/bin/rmmod ${device.bluetooth.kernelModule} 2>/dev/null || true
+        ''}
+        ${lib.concatMapStrings (m: ''
+          ${pkgs.kmod}/bin/rmmod ${m} 2>/dev/null || true
+        '')
+        device.wifi.kernelModules}
+      '';
+      powerManagement.powerUpCommands = ''
+        ${lib.concatMapStrings (m: ''
+          ${pkgs.kmod}/bin/modprobe ${m} 2>/dev/null || true
+        '') (lib.reverseList device.wifi.kernelModules)}
+        ${lib.optionalString (device.bluetooth.kernelModule != null) ''
+          ${pkgs.util-linux}/bin/setsid -f ${pkgs.writeShellScript "remarkable-bt-reload" ''
+            for _ in $(seq 1 30); do [ -d /sys/class/net/${device.wifi.interface} ] && break; sleep 1; done
+            ${pkgs.kmod}/bin/modprobe ${device.bluetooth.kernelModule} 2>/dev/null || true
+          ''} >/dev/null 2>&1 || true
+        ''}
+      '';
+    })
+
+    # Devices with measurable suspend draw and no sleep role: unbind across
+    # suspend, rebind on resume.
+    (lib.mkIf (device.suspendUnbind != []) {
+      powerManagement.powerDownCommands = lib.concatMapStrings (d: ''
+        echo ${d.busDeviceId} > "${d.driverSysfsPath}/unbind" 2>/dev/null || true
+      '')
+      device.suspendUnbind;
+      powerManagement.powerUpCommands = lib.concatMapStrings (d: ''
+        echo ${d.busDeviceId} > "${d.driverSysfsPath}/bind" 2>/dev/null || true
+      '')
+      device.suspendUnbind;
+    })
+
+    # The NFC pen charger keeps polling through deep suspend; unbind it around
+    # sleep unless we can afford it (on external power, or battery above
+    # penChargeMinSoc). The pen always charges while the device is awake.
+    (lib.mkIf (device.nfc.driverSysfsPath != null && device.nfc.busDeviceId != null) {
+      powerManagement.powerDownCommands = ''
+        keep_nfc=0
+        ${lib.optionalString (device.charger.sysfsName != null) ''
+          [ "$(cat /sys/class/power_supply/${device.charger.sysfsName}/online 2>/dev/null)" = "1" ] && keep_nfc=1
+        ''}
+        ${lib.optionalString (cfg.penChargeMinSoc != null) ''
+          soc=$(cat /sys/class/power_supply/${device.battery.sysfsName}/capacity 2>/dev/null || echo 0)
+          [ "$soc" -ge ${toString cfg.penChargeMinSoc} ] && keep_nfc=1
+        ''}
+        if [ "$keep_nfc" = "0" ]; then
+          echo ${device.nfc.busDeviceId} > "${device.nfc.driverSysfsPath}/unbind" 2>/dev/null || true
+        fi
+      '';
+      powerManagement.powerUpCommands = ''
+        echo ${device.nfc.busDeviceId} > "${device.nfc.driverSysfsPath}/bind" 2>/dev/null || true
+      '';
+    })
+
+    # The Type-C controller doesn't renegotiate input current on resume and
+    # can leave it at the 100 mA floor; force a negotiation every resume.
+    (lib.mkIf (device.charger.renegotiateSysfsPath != null) {
+      powerManagement.resumeCommands = ''
+        echo 1 > ${device.charger.renegotiateSysfsPath} 2>/dev/null || true
+      '';
+    })
 
     # On resume the WiFi chip has been powered down; NetworkManager's sleep
     # monitor normally re-associates, but nudge the radio on to guarantee it

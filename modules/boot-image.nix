@@ -200,6 +200,16 @@ in {
     # slot switching + fs tools for on-device work
     environment.systemPackages = [pkgs.mmc-utils pkgs.e2fsprogs];
 
+    # make-ext4-fs ships the store manifest at /nix-path-registration but the
+    # nix db starts empty on a freshly flashed slot; register it on first boot
+    # so on-device nix (home-manager activation, nix copy deploys) works.
+    boot.postBootCommands = ''
+      if [ -f /nix-path-registration ]; then
+        ${config.nix.package}/bin/nix-store --load-db < /nix-path-registration &&
+          rm -f /nix-path-registration
+      fi
+    '';
+
     # No NixOS-installable bootloader — the FIT ships inside the flashed
     # image. Replace the installer with a loud no-op so profile updates work
     # without touching boot.

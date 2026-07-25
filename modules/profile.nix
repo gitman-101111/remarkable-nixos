@@ -107,6 +107,30 @@ in {
       description = "power_supply name of the battery/fuel gauge (under /sys/class/power_supply/).";
     };
 
+    charger.sysfsName = mkOption {
+      type = types.nullOr types.str;
+      default = null;
+      description = "power_supply name of the charger input (under /sys/class/power_supply/), or null.";
+    };
+
+    charger.renegotiateSysfsPath = mkOption {
+      type = types.nullOr types.str;
+      default = null;
+      description = "sysfs attribute that re-runs the charger input-current negotiation when written (e.g. the fusb303b's queue_charging_negotiation), or null.";
+    };
+
+    nfc.driverSysfsPath = mkOption {
+      type = types.nullOr types.str;
+      default = null;
+      description = "sysfs driver directory of the NFC/pen-charger controller, unbound across suspend to cut its standby draw, or null.";
+    };
+
+    nfc.busDeviceId = mkOption {
+      type = types.nullOr types.str;
+      default = null;
+      description = "Bus device id of the NFC controller under its driver (written to unbind/bind).";
+    };
+
     bluetooth.kernelModule = mkOption {
       type = types.nullOr types.str;
       default = null;
@@ -117,6 +141,29 @@ in {
       type = types.str;
       default = "wlan0";
       description = "Name of the WiFi network interface (combo-chip init ordering waits on it).";
+    };
+
+    wifi.kernelModules = mkOption {
+      type = types.listOf types.str;
+      default = [];
+      description = "WiFi kernel modules in unload order (loaded in reverse on resume); enables powering the chip down across suspend.";
+    };
+
+    suspendUnbind = mkOption {
+      type = types.listOf (types.submodule {
+        options = {
+          driverSysfsPath = mkOption {
+            type = types.str;
+            description = "sysfs driver directory of the device.";
+          };
+          busDeviceId = mkOption {
+            type = types.str;
+            description = "Bus device id written to unbind/bind.";
+          };
+        };
+      });
+      default = [];
+      description = "Devices unbound across suspend (unconditionally) to cut standby draw.";
     };
 
     frontlight.kernelModule = mkOption {

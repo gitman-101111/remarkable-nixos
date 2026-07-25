@@ -42,11 +42,29 @@ in {
 
     eink.vpddSysfsPath = "/sys/bus/i2c/devices/0-0048";
     battery.sysfsName = "max77818_battery";
+    # fusb303b's write-only hook to re-run input-current negotiation (it only
+    # negotiates on events and can strand the limit at 100 mA; see power.nix).
+    charger.sysfsName = "max77818-charger";
+    charger.renegotiateSysfsPath = "/sys/bus/i2c/devices/1-0021/queue_charging_negotiation";
+    # ctn730 NFC pen charger draws ~8 mA through deep suspend (~40% of the
+    # standby floor, measured); power.nix unbinds it across sleep.
+    nfc.driverSysfsPath = "/sys/bus/i2c/drivers/nxp,ctn730-rm";
+    nfc.busDeviceId = "4-0028";
     # NXP 88W8987 (BT side of the IW611 WiFi/BT combo): boot-time autoload
     # races the WiFi side's init and the FW download times out on a fraction
     # of boots, leaving the host-wake GPIO storming and aborting every
     # suspend. Loaded after wlan0 exists instead.
     bluetooth.kernelModule = "btnxpuart";
+    # IW611 combo chip draws ~2.7 mA through deep suspend when left powered;
+    # power.nix unloads these (BT module first) before sleep, reloads after.
+    wifi.kernelModules = ["iw61x_sdw61x" "iw61x_mlan"];
+    # lis2dw12 accelerometer: ~0.8 mA in suspend, nothing consumes it asleep.
+    suspendUnbind = [
+      {
+        driverSysfsPath = "/sys/bus/i2c/drivers/st_lis2dw12_i2c";
+        busDeviceId = "0-0019";
+      }
+    ];
     frontlight.kernelModule = "aw99703_bl";
     frontlight.sysfsName = "rm_frontlight";
     touch.udevRules = "${hardware-chiappa}/eink/60-chiappa-touch.rules";
