@@ -136,61 +136,95 @@ in {
     # immediately and BT reloads in the background once the interface exists
     # (the combo chip's FW download races WiFi init otherwise).
     (lib.mkIf (device.wifi.kernelModules != []) {
-      powerManagement.powerDownCommands = ''
-        ${lib.optionalString (device.bluetooth.kernelModule != null) ''
-          ${pkgs.kmod}/bin/rmmod ${device.bluetooth.kernelModule} 2>/dev/null || true
-        ''}
-        ${lib.concatMapStrings (m: ''
-          ${pkgs.kmod}/bin/rmmod ${m} 2>/dev/null || true
-        '')
-        device.wifi.kernelModules}
-      '';
-      powerManagement.powerUpCommands = ''
-        ${lib.concatMapStrings (m: ''
-          ${pkgs.kmod}/bin/modprobe ${m} 2>/dev/null || true
-        '') (lib.reverseList device.wifi.kernelModules)}
-        ${lib.optionalString (device.bluetooth.kernelModule != null) ''
-          ${pkgs.util-linux}/bin/setsid -f ${pkgs.writeShellScript "remarkable-bt-reload" ''
-            for _ in $(seq 1 30); do [ -d /sys/class/net/${device.wifi.interface} ] && break; sleep 1; done
-            ${pkgs.kmod}/bin/modprobe ${device.bluetooth.kernelModule} 2>/dev/null || true
-          ''} >/dev/null 2>&1 || true
-        ''}
-      '';
+      # sleep.target oneshot: script runs before sleep, preStop after resume
+      # (StopWhenUnneeded stops the unit on resume, firing preStop). This is
+      # the systemd-native replacement for the deprecated
+      # powerManagement.powerUp/DownCommands.
+      systemd.services.remarkable-suspend-wifi = {
+        description = "power WiFi/BT combo chip down across suspend";
+        wantedBy = ["sleep.target"];
+        before = ["sleep.target"];
+        unitConfig.StopWhenUnneeded = true;
+        serviceConfig = {
+          Type = "oneshot";
+          RemainAfterExit = true;
+        };
+        script = ''
+          ${lib.optionalString (device.bluetooth.kernelModule != null) ''
+            ${pkgs.kmod}/bin/rmmod ${device.bluetooth.kernelModule} 2>/dev/null || true
+          ''}
+          ${lib.concatMapStrings (m: ''
+            ${pkgs.kmod}/bin/rmmod ${m} 2>/dev/null || true
+          '')
+          device.wifi.kernelModules}
+        '';
+        preStop = ''
+          ${lib.concatMapStrings (m: ''
+            ${pkgs.kmod}/bin/modprobe ${m} 2>/dev/null || true
+          '') (lib.reverseList device.wifi.kernelModules)}
+          ${lib.optionalString (device.bluetooth.kernelModule != null) ''
+            ${pkgs.util-linux}/bin/setsid -f ${pkgs.writeShellScript "remarkable-bt-reload" ''
+              for _ in $(seq 1 30); do [ -d /sys/class/net/${device.wifi.interface} ] && break; sleep 1; done
+              ${pkgs.kmod}/bin/modprobe ${device.bluetooth.kernelModule} 2>/dev/null || true
+            ''} >/dev/null 2>&1 || true
+          ''}
+        '';
+      };
     })
 
     # Devices with measurable suspend draw and no sleep role: unbind across
     # suspend, rebind on resume.
     (lib.mkIf (device.suspendUnbind != []) {
-      powerManagement.powerDownCommands = lib.concatMapStrings (d: ''
-        echo ${d.busDeviceId} > "${d.driverSysfsPath}/unbind" 2>/dev/null || true
-      '')
-      device.suspendUnbind;
-      powerManagement.powerUpCommands = lib.concatMapStrings (d: ''
-        echo ${d.busDeviceId} > "${d.driverSysfsPath}/bind" 2>/dev/null || true
-      '')
-      device.suspendUnbind;
+      systemd.services.remarkable-suspend-unbind = {
+        description = "unbind high-draw devices across suspend";
+        wantedBy = ["sleep.target"];
+        before = ["sleep.target"];
+        unitConfig.StopWhenUnneeded = true;
+        serviceConfig = {
+          Type = "oneshot";
+          RemainAfterExit = true;
+        };
+        script = lib.concatMapStrings (d: ''
+          echo ${d.busDeviceId} > "${d.driverSysfsPath}/unbind" 2>/dev/null || true
+        '')
+        device.suspendUnbind;
+        preStop = lib.concatMapStrings (d: ''
+          echo ${d.busDeviceId} > "${d.driverSysfsPath}/bind" 2>/dev/null || true
+        '')
+        device.suspendUnbind;
+      };
     })
 
     # The NFC pen charger keeps polling through deep suspend; unbind it around
     # sleep unless we can afford it (on external power, or battery above
     # penChargeMinSoc). The pen always charges while the device is awake.
     (lib.mkIf (device.nfc.driverSysfsPath != null && device.nfc.busDeviceId != null) {
-      powerManagement.powerDownCommands = ''
-        keep_nfc=0
-        ${lib.optionalString (device.charger.sysfsName != null) ''
-          [ "$(cat /sys/class/power_supply/${device.charger.sysfsName}/online 2>/dev/null)" = "1" ] && keep_nfc=1
-        ''}
-        ${lib.optionalString (cfg.penChargeMinSoc != null) ''
-          soc=$(cat /sys/class/power_supply/${device.battery.sysfsName}/capacity 2>/dev/null || echo 0)
-          [ "$soc" -ge ${toString cfg.penChargeMinSoc} ] && keep_nfc=1
-        ''}
-        if [ "$keep_nfc" = "0" ]; then
-          echo ${device.nfc.busDeviceId} > "${device.nfc.driverSysfsPath}/unbind" 2>/dev/null || true
-        fi
-      '';
-      powerManagement.powerUpCommands = ''
-        echo ${device.nfc.busDeviceId} > "${device.nfc.driverSysfsPath}/bind" 2>/dev/null || true
-      '';
+      systemd.services.remarkable-suspend-nfc = {
+        description = "unbind NFC pen charger across suspend unless affordable";
+        wantedBy = ["sleep.target"];
+        before = ["sleep.target"];
+        unitConfig.StopWhenUnneeded = true;
+        serviceConfig = {
+          Type = "oneshot";
+          RemainAfterExit = true;
+        };
+        script = ''
+          keep_nfc=0
+          ${lib.optionalString (device.charger.sysfsName != null) ''
+            [ "$(cat /sys/class/power_supply/${device.charger.sysfsName}/online 2>/dev/null)" = "1" ] && keep_nfc=1
+          ''}
+          ${lib.optionalString (cfg.penChargeMinSoc != null) ''
+            soc=$(cat /sys/class/power_supply/${device.battery.sysfsName}/capacity 2>/dev/null || echo 0)
+            [ "$soc" -ge ${toString cfg.penChargeMinSoc} ] && keep_nfc=1
+          ''}
+          if [ "$keep_nfc" = "0" ]; then
+            echo ${device.nfc.busDeviceId} > "${device.nfc.driverSysfsPath}/unbind" 2>/dev/null || true
+          fi
+        '';
+        preStop = ''
+          echo ${device.nfc.busDeviceId} > "${device.nfc.driverSysfsPath}/bind" 2>/dev/null || true
+        '';
+      };
     })
 
     # The Type-C controller doesn't renegotiate input current on resume and
