@@ -76,6 +76,11 @@ in {
       default = null;
       description = "Battery % at or above which the NFC pen charger stays powered through suspend (it always stays powered when on external power; ~8 mA suspend cost). null = only on external power.";
     };
+    offAfterSuspend = lib.mkOption {
+      type = lib.types.nullOr lib.types.int;
+      default = 12;
+      description = "Hours of unbroken suspend after which the device powers off cleanly (RTC-alarm wake; any other wake cancels it). Cold boot on next wake; the reader restores its saved position. null = stay suspended indefinitely.";
+    };
   };
 
   config = lib.mkIf cfg.enable (lib.mkMerge [
@@ -168,6 +173,40 @@ in {
               ${pkgs.kmod}/bin/modprobe ${device.bluetooth.kernelModule} 2>/dev/null || true
             ''} >/dev/null 2>&1 || true
           ''}
+        '';
+      };
+    })
+
+    # Long-standby power off: arm an RTC alarm at each suspend entry; at
+    # resume, alarm armed + consumed + due = the timer woke us → clean
+    # shutdown (zero standby draw); any other wake cancels the alarm.
+    (lib.mkIf (cfg.offAfterSuspend != null) {
+      systemd.services.remarkable-suspend-offtimer = {
+        description = "power off after ${toString cfg.offAfterSuspend}h of suspend";
+        wantedBy = ["sleep.target"];
+        before = ["sleep.target"];
+        unitConfig.StopWhenUnneeded = true;
+        serviceConfig = {
+          Type = "oneshot";
+          RemainAfterExit = true;
+        };
+        script = ''
+          echo 0 > /sys/class/rtc/rtc0/wakealarm 2>/dev/null || true
+          t=$(($(${pkgs.coreutils}/bin/date +%s) + ${toString (cfg.offAfterSuspend * 3600)}))
+          if echo "$t" > /sys/class/rtc/rtc0/wakealarm 2>/dev/null; then
+            echo "$t" > /run/suspend-offtimer
+          fi
+        '';
+        preStop = ''
+          armed=$(${pkgs.coreutils}/bin/cat /run/suspend-offtimer 2>/dev/null || true)
+          ${pkgs.coreutils}/bin/rm -f /run/suspend-offtimer
+          now=$(${pkgs.coreutils}/bin/date +%s)
+          pending=$(${pkgs.coreutils}/bin/cat /sys/class/rtc/rtc0/wakealarm 2>/dev/null || true)
+          if [ -n "$armed" ] && [ -z "$pending" ] && [ "$now" -ge "$armed" ]; then
+            ${pkgs.systemd}/bin/systemctl poweroff --no-block
+          else
+            echo 0 > /sys/class/rtc/rtc0/wakealarm 2>/dev/null || true
+          fi
         '';
       };
     })

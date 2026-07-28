@@ -26,6 +26,13 @@ in {
   config = lib.mkIf (cfg.enable && device.frontlight.sysfsName != null) {
     users.users.${config.remarkable.primaryUser}.extraGroups = ["video"];
 
+    # stop_on_suspend via modprobe.d, applied AT module load: the boot-time
+    # sysfs write below races the module and can silently lose (observed:
+    # LED stays lit through suspend).
+    boot.extraModprobeConfig = lib.optionalString (device.frontlight.kernelModule != null) ''
+      options ${device.frontlight.kernelModule} stop_on_suspend=1
+    '';
+
     # Make the backlight writable by the video group so unprivileged apps can
     # set brightness. %k is the backlight name.
     services.udev.extraRules = ''
@@ -39,11 +46,11 @@ in {
         Type = "oneshot";
         RemainAfterExit = true;
         ExecStart = pkgs.writeShellScript "remarkable-frontlight" ''
+          # The backlight device can appear after multi-user; wait for it.
+          for _ in $(seq 1 30); do [ -e ${node}/brightness ] && break; sleep 1; done
           ${lib.optionalString (device.frontlight.kernelModule != null) ''
-            # Suspend handling is behind the driver's stop_on_suspend module
-            # param (adds BL_CORE_SUSPENDRESUME: the backlight core blanks the
-            # LED across suspend and restores it on resume). Default N = light
-            # stays lit while asleep. Runtime-writable.
+            # Belt for the modprobe.d option (suspend blanking via
+            # BL_CORE_SUSPENDRESUME).
             echo 1 > /sys/module/${device.frontlight.kernelModule}/parameters/stop_on_suspend 2>/dev/null || true
           ''}
           echo ${toString cfg.defaultBrightness} > ${node}/brightness 2>/dev/null || true

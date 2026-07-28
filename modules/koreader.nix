@@ -51,6 +51,16 @@
     # KoReader dlopens optional backends; don't fail the build on those.
     autoPatchelfIgnoreMissingDeps = true;
     unpackPhase = "unzip -q $src";
+    # The system owns long-standby shutdown (remarkable.power.offAfterSuspend;
+    # KoReader is frozen during suspend, so its autoshutdown can never fire
+    # there). Remove the plugin's Autoshutdown menu entry and scheduling while
+    # keeping canPowerOff (the manual power-off action stays — KoReader is the
+    # only UI).
+    postPatch = ''
+      substituteInPlace koreader/plugins/autosuspend.koplugin/main.lua \
+        --replace-fail "if Device:canPowerOff() then" "if false then -- remarkable-nixos: system owns shutdown" \
+        --replace-fail "return Device:canPowerOff() and self.autoshutdown_timeout_seconds > 0" "return false -- remarkable-nixos: system owns shutdown"
+    '';
     installPhase = ''
       mkdir -p $out
       cp -r koreader $out/koreader
@@ -201,6 +211,16 @@
     -- this returns the singleton (requiring it earlier crashes KoReader).
     local Device = require("device")
     Device.hasOTAUpdates = function() return false end
+  '';
+
+  # The Paper Pro device class hardcodes canSuspend=no (upstream assumes
+  # KoReader runs beside xochitl, which owns power). Here KoReader IS the UI
+  # and Remarkable:suspend() ends in `systemctl suspend` (polkit-permitted),
+  # so flip it on — this is what makes the autosuspend plugin (idle → suspend,
+  # default 15 min) load and show its menu entry.
+  suspendPatch = pkgs.writeTextDir "2-remarkable-can-suspend.lua" ''
+    local Device = require("device")
+    Device.canSuspend = function() return true end
   '';
 
   # KoReader's file manager execl()s /bin/mv and /bin/cp (filemanager.lua, the
@@ -415,7 +435,7 @@ in {
     environment.systemPackages = [launcher];
 
     remarkable.koreader.extraPatchDirs =
-      [otaPatch fileBinsPatch]
+      [otaPatch fileBinsPatch suspendPatch]
       ++ (lib.optional (cfg.menuCommands != []) menuCommandsPatch)
       ++ (lib.optional config.networking.networkmanager.enable wifiPatch);
 
