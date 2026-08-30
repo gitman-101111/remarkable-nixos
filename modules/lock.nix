@@ -86,11 +86,13 @@
     exit 1
   '';
 
-  # Only the timeout case suspends. A `systemctl stop` of this unit must not
-  # become a suspend — power.nix issues one on the 24h wake while racing a
-  # poweroff — and an exit-code failure has already thawed the reader, whose
-  # own idle-suspend then covers it.
-  resumeTimeoutAction = pkgs.writeShellScript "remarkable-lock-resume-timeout" ''
+  # ExecStopPost for both lock units. Only the timeout case suspends: a
+  # `systemctl stop` must not become a suspend — power.nix cancels this unit's
+  # job on the long-standby wake while racing a poweroff — and an exit-code
+  # failure has already thawed the reader, whose own idle-suspend then covers
+  # it. Suspending (rather than unlocking or powering off) keeps the device
+  # locked: the next wake re-runs the resume lock.
+  timeoutSuspend = pkgs.writeShellScript "remarkable-lock-timeout-suspend" ''
     [ "$SERVICE_RESULT" = timeout ] || exit 0
     ${systemctl} suspend
   '';
@@ -119,6 +121,17 @@ in {
         the pad up indefinitely.
       '';
     };
+    bootTimeout = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = ''
+        Same, for the boot PIN pad: an unanswered pad suspends the device,
+        still locked. Distinct from resumeTimeout because the reader is not
+        running yet at boot, so there is no idle-suspend to fall back on — but
+        someone who just pressed power is usually present, so this wants a
+        longer grace period. null (the default) keeps the pad up indefinitely.
+      '';
+    };
   };
 
   config = lib.mkIf cfg.enable {
@@ -134,14 +147,19 @@ in {
       requires = ["remarkable-eink.service"];
       # Never re-run mid-session. switch-to-configuration otherwise restarts
       # this whenever the lock script changes, which re-locks an already
-      # unlocked device, blocks the deploy on physical PIN entry (nothing
-      # times this one out), and paints the pad over a live reader.
+      # unlocked device, blocks the deploy on physical PIN entry, and paints
+      # the pad over a live reader.
       restartIfChanged = false;
-      serviceConfig = {
-        Type = "oneshot";
-        RemainAfterExit = true;
-        ExecStart = lockScript;
-      };
+      serviceConfig =
+        {
+          Type = "oneshot";
+          RemainAfterExit = true;
+          ExecStart = lockScript;
+        }
+        // lib.optionalAttrs (cfg.bootTimeout != null) {
+          TimeoutStartSec = cfg.bootTimeout;
+          ExecStopPost = timeoutSuspend;
+        };
     };
     systemd.services.koreader.after = ["remarkable-lock-boot.service"];
 
@@ -157,7 +175,7 @@ in {
         }
         // lib.optionalAttrs (cfg.resumeTimeout != null) {
           TimeoutStartSec = cfg.resumeTimeout;
-          ExecStopPost = resumeTimeoutAction;
+          ExecStopPost = timeoutSuspend;
         };
     };
   };
