@@ -34,13 +34,14 @@
 
   # Power-on splash: the NixOS snowflake centered on white, from nixpkgs'
   # freely licensed nixos-icons — no vendor art involved.
-  nixosSplash = pkgs.runCommandLocal "eink-frame-poweron" {
-    nativeBuildInputs = [pkgs.buildPackages.imagemagick];
-  } ''
-    magick ${pkgs.nixos-icons}/share/icons/hicolor/1024x1024/apps/nix-snowflake.png \
-      -background white -flatten -resize 600x600 \
-      -gravity center -extent ${geometry} -depth 8 rgb:$out
-  '';
+  nixosSplash =
+    pkgs.runCommandLocal "eink-frame-poweron" {
+      nativeBuildInputs = [pkgs.buildPackages.imagemagick];
+    } ''
+      magick ${pkgs.nixos-icons}/share/icons/hicolor/1024x1024/apps/nix-snowflake.png \
+        -background white -flatten -resize 600x600 \
+        -gravity center -extent ${geometry} -depth 8 rgb:$out
+    '';
 
   frames = {
     poweron = nixosSplash;
@@ -97,8 +98,10 @@ in {
         wantedBy = ["multi-user.target"];
         after = ["remarkable-eink.service"];
         requires = ["remarkable-eink.service"];
+        restartIfChanged = false;
         serviceConfig = {
           Type = "oneshot";
+          RemainAfterExit = true;
           # Retry the DRAW, not just the socket's existence: the bridge binds
           # the socket before its Qt engine can render, so a draw right at
           # socket-appearance can fail; on a fresh store the engine takes ~10 s.

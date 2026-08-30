@@ -42,21 +42,21 @@
       soc=$(cat "$BAT/capacity" 2>/dev/null || echo 100)
       status=$(cat "$BAT/status" 2>/dev/null || echo Unknown)
       ${lib.optionalString hasChargerWatchdog ''
-        # Recover a stranded input-current limit: charger online but limit at
-        # the 100 mA floor, or discharging on live input → renegotiate.
-        if [ "$(cat "$CHG/online" 2>/dev/null)" = "1" ]; then
-          cur=$(cat "$CHG/current_max" 2>/dev/null || echo 0)
-          if [ "$cur" -le 100000 ] || [ "$status" = "Discharging" ]; then
-            echo 1 > ${device.charger.renegotiateSysfsPath} 2>/dev/null || true
-          fi
+      # Recover a stranded input-current limit: charger online but limit at
+      # the 100 mA floor, or discharging on live input → renegotiate.
+      if [ "$(cat "$CHG/online" 2>/dev/null)" = "1" ]; then
+        cur=$(cat "$CHG/current_max" 2>/dev/null || echo 0)
+        if [ "$cur" -le 100000 ] || [ "$status" = "Discharging" ]; then
+          echo 1 > ${device.charger.renegotiateSysfsPath} 2>/dev/null || true
         fi
-      ''}
+      fi
+    ''}
       if [ "$soc" -le ${toString cfg.lowSoc} ] && [ "$status" = "Discharging" ]; then
         ${lib.optionalString (lowBattShow != null) ''
-          # Show the battery-empty frame, then let it render before we go.
-          ${lowBattShow} 2>/dev/null || true
-          sleep 3
-        ''}
+      # Show the battery-empty frame, then let it render before we go.
+      ${lowBattShow} 2>/dev/null || true
+      sleep 3
+    ''}
         ${pkgs.systemd}/bin/systemctl poweroff
         exit 0
       fi
@@ -159,9 +159,9 @@ in {
             ${pkgs.kmod}/bin/rmmod ${device.bluetooth.kernelModule} 2>/dev/null || true
           ''}
           ${lib.concatMapStrings (m: ''
-            ${pkgs.kmod}/bin/rmmod ${m} 2>/dev/null || true
-          '')
-          device.wifi.kernelModules}
+              ${pkgs.kmod}/bin/rmmod ${m} 2>/dev/null || true
+            '')
+            device.wifi.kernelModules}
         '';
         preStop = ''
           ${lib.concatMapStrings (m: ''
@@ -203,12 +203,34 @@ in {
           now=$(${pkgs.coreutils}/bin/date +%s)
           pending=$(${pkgs.coreutils}/bin/cat /sys/class/rtc/rtc0/wakealarm 2>/dev/null || true)
           if [ -n "$armed" ] && [ -z "$pending" ] && [ "$now" -ge "$armed" ]; then
+            ${lib.optionalString config.remarkable.lock.enable ''
+            # logind starts suspend.target irreversibly, so lock-resume's
+            # pending start job makes the poweroff a "destructive" transaction
+            # (exit 4/NOPERMISSION) — and `systemctl stop` is refused for the
+            # identical reason. `cancel` drops the job without enqueuing a
+            # transaction, which is the only thing that clears it. Nobody
+            # types a PIN on an unattended timer wake.
+            job=$(${pkgs.systemd}/bin/systemctl list-jobs --no-legend 2>/dev/null | ${pkgs.gawk}/bin/awk '/remarkable-lock-resume\.service/{print $1}')
+            if [ -n "$job" ]; then
+              ${pkgs.systemd}/bin/systemctl cancel "$job" || echo "offtimer: could not cancel lock-resume job $job"
+            fi
+          ''}
             ${pkgs.systemd}/bin/systemctl poweroff --no-block
           else
             echo 0 > /sys/class/rtc/rtc0/wakealarm 2>/dev/null || true
           fi
         '';
       };
+    })
+
+    # Devices whose interrupts must not pull the system out of deep suspend.
+    # Applied by udev at add/change, so it survives a reboot with no service.
+    (lib.mkIf (device.disarmWakeup != []) {
+      services.udev.extraRules =
+        lib.concatMapStrings (d: ''
+          ACTION=="add|change", SUBSYSTEM=="${d.subsystem}", KERNEL=="${d.kernel}", ATTR{power/wakeup}="disabled"
+        '')
+        device.disarmWakeup;
     })
 
     # Devices with measurable suspend draw and no sleep role: unbind across
@@ -223,14 +245,16 @@ in {
           Type = "oneshot";
           RemainAfterExit = true;
         };
-        script = lib.concatMapStrings (d: ''
-          echo ${d.busDeviceId} > "${d.driverSysfsPath}/unbind" 2>/dev/null || true
-        '')
-        device.suspendUnbind;
-        preStop = lib.concatMapStrings (d: ''
-          echo ${d.busDeviceId} > "${d.driverSysfsPath}/bind" 2>/dev/null || true
-        '')
-        device.suspendUnbind;
+        script =
+          lib.concatMapStrings (d: ''
+            echo ${d.busDeviceId} > "${d.driverSysfsPath}/unbind" 2>/dev/null || true
+          '')
+          device.suspendUnbind;
+        preStop =
+          lib.concatMapStrings (d: ''
+            echo ${d.busDeviceId} > "${d.driverSysfsPath}/bind" 2>/dev/null || true
+          '')
+          device.suspendUnbind;
       };
     })
 

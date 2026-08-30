@@ -166,6 +166,28 @@ in {
       description = "Devices unbound across suspend (unconditionally) to cut standby draw.";
     };
 
+    disarmWakeup = mkOption {
+      type = types.listOf (types.submodule {
+        options = {
+          subsystem = mkOption {
+            type = types.str;
+            description = "udev SUBSYSTEM== match.";
+          };
+          kernel = mkOption {
+            type = types.str;
+            description = "udev KERNEL== match.";
+          };
+        };
+      });
+      default = [];
+      description = ''
+        Devices whose power/wakeup is disarmed, so their interrupts cannot pull
+        the system out of deep suspend. For hardware that raises interrupts
+        nothing needs to act on while asleep — e.g. a PMIC reporting charge
+        state, which otherwise wakes the device on every charger event.
+      '';
+    };
+
     frontlight.kernelModule = mkOption {
       type = types.nullOr types.str;
       default = null;

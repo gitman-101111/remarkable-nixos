@@ -112,6 +112,19 @@
       CONFIG_TUN=m
       CONFIG_CRYPTO_LIB_CURVE25519=m
       CONFIG_CRYPTO_LIB_CHACHA20POLY1305=m
+
+      # eDMA. The vendor config ships `# CONFIG_DMADEVICES is not set`, so no
+      # dmaengine provider ever registers and every dma_request_chan() returns
+      # -ENODEV. The DT wires it up correctly — dma-controller@44000000 is
+      # "fsl,imx93-edma3" and lpspi2 (the elants touch/pen controller, 8 MHz)
+      # references it via dmas/dma-names — so the SPI driver falls back to
+      # programmed I/O on every transfer:
+      #   fsl_lpspi 44360000.spi: dma setup error -19, use pio
+      # which makes the CPU hand-clock every byte of every touch/pen report.
+      # DMADEVICES + FSL_EDMA are enough; the configurePhase's `make oldconfig`
+      # resolves the DMA_ENGINE / DMA_VIRTUAL_CHANNELS selects.
+      CONFIG_DMADEVICES=y
+      CONFIG_FSL_EDMA=y
     ''
   );
 in {

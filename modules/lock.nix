@@ -60,10 +60,22 @@
       [ ! -e /run/swtfb.save ] && break
       sleep 0.5
     done
+    # The pad clobbers the shared framebuffer and the frozen app never learns
+    # of it, so snapshot the app's frame first — same trick as the sleep screen
+    # and the app launcher. Without this the panel keeps showing the pad after
+    # unlock (it is bistable, and the app only repaints on input), so the
+    # reader stays hidden until the screen is tapped.
+    ${pkgs.coreutils}/bin/cp /dev/shm/swtfb /run/swtfb.lock.save 2>/dev/null || true
     # Freeze the reader app so it cannot repaint over the pad (a no-op at boot,
     # where it is not yet running); always thaw, even if the pad is killed.
     ${freezeCmds "STOP"}
-    thaw() { ${freezeCmds "CONT"} }
+    thaw() {
+      if [ -f /run/swtfb.lock.save ]; then
+        ${config.remarkable.eink.showPackage}/bin/eink-show /run/swtfb.lock.save 2>/dev/null || true
+        ${pkgs.coreutils}/bin/rm -f /run/swtfb.lock.save
+      fi
+      ${freezeCmds "CONT"}
+    }
     trap thaw EXIT
     # Retry transient failures (a bridge restart recreates both artifacts).
     # Exit 0 = unlocked or no PIN set; nonzero = could not run.
@@ -72,6 +84,15 @@
       sleep 2
     done
     exit 1
+  '';
+
+  # Only the timeout case suspends. A `systemctl stop` of this unit must not
+  # become a suspend — power.nix issues one on the 24h wake while racing a
+  # poweroff — and an exit-code failure has already thawed the reader, whose
+  # own idle-suspend then covers it.
+  resumeTimeoutAction = pkgs.writeShellScript "remarkable-lock-resume-timeout" ''
+    [ "$SERVICE_RESULT" = timeout ] || exit 0
+    ${systemctl} suspend
   '';
 in {
   options.remarkable.lock = {
@@ -87,6 +108,17 @@ in {
       defaultText = lib.literalExpression ''lib.optional config.remarkable.koreader.enable "koreader.service"'';
       description = "Systemd units SIGSTOP'd while the lock pad is shown (so the running app cannot repaint over it) and SIGCONT'd after unlock.";
     };
+    resumeTimeout = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = "5min";
+      description = ''
+        systemd time span after which an unanswered resume PIN pad gives up and
+        the device suspends again, still locked. swtfb-pinpad otherwise blocks
+        forever with the reader SIGSTOP'd behind it, so a wake nobody answers
+        parks the device awake and its idle-suspend can never fire. null keeps
+        the pad up indefinitely.
+      '';
+    };
   };
 
   config = lib.mkIf cfg.enable {
@@ -100,6 +132,11 @@ in {
       wantedBy = ["multi-user.target"];
       after = ["remarkable-eink.service" "remarkable-screen-poweron.service"];
       requires = ["remarkable-eink.service"];
+      # Never re-run mid-session. switch-to-configuration otherwise restarts
+      # this whenever the lock script changes, which re-locks an already
+      # unlocked device, blocks the deploy on physical PIN entry (nothing
+      # times this one out), and paints the pad over a live reader.
+      restartIfChanged = false;
       serviceConfig = {
         Type = "oneshot";
         RemainAfterExit = true;
@@ -113,10 +150,15 @@ in {
       description = "PIN lock (resume)";
       wantedBy = ["suspend.target"];
       after = ["systemd-suspend.service"];
-      serviceConfig = {
-        Type = "oneshot";
-        ExecStart = lockScript;
-      };
+      serviceConfig =
+        {
+          Type = "oneshot";
+          ExecStart = lockScript;
+        }
+        // lib.optionalAttrs (cfg.resumeTimeout != null) {
+          TimeoutStartSec = cfg.resumeTimeout;
+          ExecStopPost = resumeTimeoutAction;
+        };
     };
   };
 }

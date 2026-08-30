@@ -65,6 +65,26 @@ in {
         busDeviceId = "0-0019";
       }
     ];
+    # The max77818 PMIC (charger + fuel gauge) is armed as a wakeup source, so
+    # charger interrupts pull the device out of deep suspend — observed waking
+    # a sleeping unit after 84 min on the charger ("PM: Triggering wakeup from
+    # IRQ 29 (max77818 intsrc)"). Nothing needs a charge event while suspended:
+    # the battery guard only polls awake, the long-standby shutdown is its own
+    # RTC alarm, and Type-C renegotiation runs from resumeCommands on resume.
+    disarmWakeup = [
+      {
+        subsystem = "i2c";
+        kernel = "0-0066";
+      }
+      {
+        subsystem = "power_supply";
+        kernel = "max77818-charger";
+      }
+      {
+        subsystem = "power_supply";
+        kernel = "max77818_battery";
+      }
+    ];
     frontlight.kernelModule = "aw99703_bl";
     frontlight.sysfsName = "rm_frontlight";
     touch.udevRules = "${hardware-chiappa}/eink/60-chiappa-touch.rules";
