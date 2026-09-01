@@ -59,7 +59,7 @@
     ]
     (builtins.readFile "${hardware-chiappa}/kernel/config-remarkable-chiappa.aarch64");
 
-  configFile = builtins.toFile "chiappa-nixos-kernel.config" (
+  configFile = pkgs.writeText "chiappa-nixos-kernel.config" (
     baseConfig
     + ''
 
