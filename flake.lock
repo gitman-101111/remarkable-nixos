@@ -1,0 +1,78 @@
+{
+  "nodes": {
+    "chiappa": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1785253660,
+        "narHash": "sha256-iwNc+dU21kQ+wqGOSPFukOf/p90X13oafd/pu3s9GcM=",
+        "owner": "gitman-101111",
+        "repo": "chiappa",
+        "rev": "5010b1137bddd7f7a643cd2dc71d41876d25e97b",
+        "type": "github"
+      },
+      "original": {
+        "owner": "gitman-101111",
+        "repo": "chiappa",
+        "type": "github"
+      }
+    },
+    "koreader": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1785477600,
+        "narHash": "sha256-im9DRF0yBwuOBsFjkhgZgsSPhG8kgPtDFjNGHuftpyk=",
+        "type": "tarball",
+        "url": "https://github.com/koreader/koreader/releases/download/v2026.07.1/koreader-remarkable-aarch64-v2026.07.1.zip"
+      },
+      "original": {
+        "type": "tarball",
+        "url": "https://github.com/koreader/koreader/releases/download/v2026.07.1/koreader-remarkable-aarch64-v2026.07.1.zip"
+      }
+    },
+    "linux-chiappa": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1788895115,
+        "lfs": true,
+        "narHash": "sha256-tafPl1SIMQJzWGxhlSv4q+upEkj0ijbGubPPwLIcjGQ=",
+        "ref": "refs/heads/rmpp_6.12.49_v3.28.x",
+        "rev": "0b33b415dc937ca6a2479d2c45f5af83efe10947",
+        "shallow": true,
+        "type": "git",
+        "url": "https://github.com/reMarkable/linux-imx-rm.git"
+      },
+      "original": {
+        "lfs": true,
+        "shallow": true,
+        "type": "git",
+        "url": "https://github.com/reMarkable/linux-imx-rm.git"
+      }
+    },
+    "nixpkgs": {
+      "locked": {
+        "lastModified": 1791594108,
+        "narHash": "sha256-XK4KceonkwD8LuMAt/vNrz982mXJM5jeHAxMwsUXXAQ=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "6510408d147d8c5e6d76043e899e9251756f6a75",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixos-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "root": {
+      "inputs": {
+        "chiappa": "chiappa",
+        "koreader": "koreader",
+        "linux-chiappa": "linux-chiappa",
+        "nixpkgs": "nixpkgs"
+      }
+    }
+  },
+  "root": "root",
+  "version": 7
+}

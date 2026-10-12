@@ -1,13 +1,24 @@
 # chiappa kernel: reMarkable's fork of the NXP i.MX 6.12.49 BSP, built with
 # the vendor's COMPLETE config plus the deltas below. Config + patches come
-# from the chiappa hardware layer (flake input); the source tarball is fetched
-# from reMarkable's GitHub (git-lfs raw).
+# from the chiappa hardware layer (flake input); the source tree is the
+# linux-chiappa flake input (reMarkable's linux-imx-rm repo; the release
+# tarball inside it is extracted at build time).
 {
   pkgs,
   hardware-chiappa,
+  linux-chiappa,
+  lib,
   ...
 }: let
-  version = "6.12.49";
+  field = pfx: s: lib.removePrefix pfx (lib.findFirst (lib.hasPrefix pfx) pfx (lib.splitString "\n" s));
+  tarball = "${linux-chiappa}/${lib.findFirst (lib.hasSuffix ".tar.gz") null (builtins.attrNames (builtins.readDir linux-chiappa.outPath))}";
+  version = lib.fileContents (pkgs.runCommand "linux-chiappa-version" {} ''
+    tar -xzOf ${tarball} --wildcards --no-wildcards-match-slash --occurrence=1 '*/Makefile' \
+      | sed -n -E 's/^(VERSION|PATCHLEVEL|SUBLEVEL|EXTRAVERSION) = ?//p' \
+      | paste -sd' ' | awk '{print $1 "." $2 "." $3 $4}' > $out
+  '');
+  vendorConfig = builtins.readFile "${hardware-chiappa}/kernel/config-remarkable-chiappa.aarch64";
+  localVersion = lib.removeSuffix "\"" (field "CONFIG_LOCALVERSION=\"" vendorConfig);
 
   # Content-address each kernel patch by reading its bytes and re-storing them
   # (same trick the config below uses via readFile/toFile). This decouples the
@@ -57,7 +68,7 @@
       "CONFIG_USB_CHIPIDEA_IMX=y"
       "# CONFIG_DM_INIT is not set"
     ]
-    (builtins.readFile "${hardware-chiappa}/kernel/config-remarkable-chiappa.aarch64");
+    vendorConfig;
 
   configFile = pkgs.writeText "chiappa-nixos-kernel.config" (
     baseConfig
@@ -130,13 +141,10 @@
 in {
   remarkable.kernel = {
     inherit version configFile;
-    # matches CONFIG_LOCALVERSION so /lib/modules paths line up
-    modDirVersion = "${version}+git+122eda1b63d9";
 
-    src = pkgs.fetchurl {
-      url = "https://github.com/reMarkable/linux-imx-rm/raw/rmpp_6.12.49_v3.26.x/linux-imx-rel-5.6-vc-3.26.0.68-122eda1b63d9.tar.gz";
-      hash = "sha256-6ZaWkM5ZOY8cs7FKuUbOfpQnRMdp3t+ikaK+ADuLthw=";
-    };
+    modDirVersion = "${version}${localVersion}";
+
+    src = tarball;
 
     # Build with gcc 14, NOT nixpkgs' default. This is a 2024-era BSP kernel;
     # gcc 15 miscompiles it into a kernel that panics before any console

@@ -40,6 +40,7 @@ your config       your user + SSH key + the vendor blobs extracted from your
 ```nix
 {
   inputs.remarkable-nixos.url = "github:gitman-101111/remarkable-nixos";
+  inputs.remarkable-nixos.inputs.nixpkgs.follows = "nixpkgs";
 
   outputs = {nixpkgs, remarkable-nixos, ...}: {
     nixosConfigurations.mytablet = nixpkgs.lib.nixosSystem {
@@ -156,3 +157,21 @@ open.
 ## License
 
 [MIT](LICENSE).
+
+## Updating
+
+What moves, and how each piece is kept current:
+
+| What | Pinned in | Update path |
+|------|-----------|-------------|
+| KoReader release | `koreader` input in `flake.nix` (URL) + `flake.lock` (hash) | Edit the version in the input URL, then `nix flake update koreader`. Release assets carry the version in their name, so `nix flake update` alone re-locks the same zip; the **update** workflow does the URL edit for you weekly. |
+| Vendor kernel snapshot | `linux-chiappa` input (`git+https://…/linux-imx-rm.git?lfs=1`) + `flake.lock` | `nix flake update`. reMarkable keeps the newest firmware branch as the repo default, so the input floats to it; the release tarball inside is git-LFS and is extracted at build time. `version` comes from the tarball’s Makefile and `modDirVersion` from the vendor config, so nothing else moves. |
+| `nixpkgs`, `chiappa` inputs | `flake.lock` | `nix flake update`. |
+
+Locking `linux-chiappa` downloads the 260 MB tarball as an LFS object (about half a minute); it stays compressed in the store until the kernel builds.
+
+The **update** workflow does all of the above weekly on an arm64 runner —
+bump KoReader, `nix flake update` (which moves the kernel), evaluate the reference
+config (no builds) — and opens one PR. Build locally (`nix build .#checks.aarch64-linux.kernel`) and boot it on a device, then
+merge. Downstream, `nix flake update remarkable-nixos` in your own config
+picks the merged pins up.

@@ -24,7 +24,7 @@ in {
       description = "Full module dir version incl. CONFIG_LOCALVERSION suffix, so /lib/modules lines up.";
     };
     src = mkOption {
-      type = types.package;
+      type = types.path;
       description = "Kernel source (the vendor BSP tree/tarball).";
     };
     configFile = mkOption {

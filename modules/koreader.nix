@@ -34,40 +34,43 @@
     installPhase = "install -Dm755 einkbridge-fb-shim.so $out/lib/einkbridge-qtfb-shim.so";
   };
 
+  koVersion = let
+    f = "${cfg.src}/git-rev";
+  in
+    if builtins.pathExists f
+    then lib.removePrefix "v" (lib.fileContents f)
+    else "unknown";
+
   # KoReader reMarkable aarch64 device build (NOT nixpkgs' SDL desktop build).
   # Prebuilt binaries (luajit + bundled libs/) → autoPatchelf onto nixpkgs libs.
   koreader = pkgs.stdenvNoCC.mkDerivation {
     pname = "koreader-remarkable";
-    version = cfg.version;
-    src = pkgs.fetchurl {
-      url = "https://github.com/koreader/koreader/releases/download/v${cfg.version}/koreader-remarkable-aarch64-v${cfg.version}.zip";
-      hash = cfg.hash;
-    };
-    nativeBuildInputs = [pkgs.unzip pkgs.autoPatchelfHook];
+    version = koVersion;
+    src = cfg.src;
+    nativeBuildInputs = [pkgs.autoPatchelfHook];
     buildInputs = [
       (lib.getLib pkgs.stdenv.cc.cc) # libstdc++, libgcc_s
       pkgs.zlib
     ];
     # KoReader dlopens optional backends; don't fail the build on those.
     autoPatchelfIgnoreMissingDeps = true;
-    unpackPhase = "unzip -q $src";
     # The system owns long-standby shutdown (remarkable.power.offAfterSuspend;
     # KoReader is frozen during suspend, so its autoshutdown can never fire
     # there). Remove the plugin's Autoshutdown menu entry and scheduling while
     # keeping canPowerOff (the manual power-off action stays — KoReader is the
     # only UI).
     postPatch = ''
-      substituteInPlace koreader/plugins/autosuspend.koplugin/main.lua \
+      substituteInPlace plugins/autosuspend.koplugin/main.lua \
         --replace-fail "if Device:canPowerOff() then" "if false then -- remarkable-nixos: system owns shutdown" \
         --replace-fail "return Device:canPowerOff() and self.autoshutdown_timeout_seconds > 0" "return false -- remarkable-nixos: system owns shutdown"
     '';
     installPhase = ''
-      mkdir -p $out
-      cp -r koreader $out/koreader
+      mkdir -p $out/koreader
+      cp -r . $out/koreader/
     '';
   };
 
-  koDir = "${koreader}/koreader";
+  koDir = "${cfg.package}/koreader";
 
   launcher = pkgs.writeShellScriptBin "koreader" ''
     set -e
@@ -369,15 +372,15 @@ in {
       default = false;
       description = "Start KoReader as a system service after the e-ink bridge.";
     };
-    version = lib.mkOption {
-      type = lib.types.str;
-      default = "2026.03";
-      description = "KoReader release version (reMarkable aarch64 build).";
+    src = lib.mkOption {
+      type = lib.types.path;
+      description = "Unpacked KoReader reMarkable aarch64 release; the flake sets this from its koreader input.";
     };
-    hash = lib.mkOption {
-      type = lib.types.str;
-      default = "sha256-VmIdXuZq2U9PPi5tIE6MNL5zA0P5Fe3Da7B2oEOi5Gg=";
-      description = "sha256 of the KoReader release zip (update together with version).";
+    package = lib.mkOption {
+      type = lib.types.package;
+      default = koreader;
+      defaultText = lib.literalMD "the patched release build";
+      description = "The patched KoReader tree (contains koreader/).";
     };
     userPatches = lib.mkOption {
       type = lib.types.nullOr lib.types.path;

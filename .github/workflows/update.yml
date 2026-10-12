@@ -1,0 +1,84 @@
+name: update
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+    inputs:
+      koreader:
+        description: "KoReader version (e.g. 2026.07.1); empty = newest stable"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v7
+      - uses: DeterminateSystems/nix-installer-action@v23
+
+      - name: Point the koreader input at the newest stable release
+        id: ko
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WANT: ${{ inputs.koreader }}
+        run: |
+          ver() { grep -oE 'koreader-remarkable-aarch64-v[0-9]{4}\.[0-9]{2}(\.[0-9]+)?\.zip' flake.nix | head -1 | grep -oE '[0-9]{4}\.[0-9]{2}(\.[0-9]+)?'; }
+          before=$(ver)
+          want="${WANT#v}"
+          if [ -z "$want" ]; then
+            want=$(gh api repos/koreader/koreader/releases/latest --jq '.tag_name' | sed 's/^v//')
+          fi
+          if [ "$want" != "$before" ]; then
+            url="https://github.com/koreader/koreader/releases/download/v${want}/koreader-remarkable-aarch64-v${want}.zip"
+            curl -fsSLI -o /dev/null "$url"
+            sed -i "s|v${before}/koreader-remarkable-aarch64-v${before}\.zip|v${want}/koreader-remarkable-aarch64-v${want}.zip|" flake.nix
+            grep -q "$url" flake.nix
+          fi
+          echo "before=$before" >> "$GITHUB_OUTPUT"
+          echo "after=$want"    >> "$GITHUB_OUTPUT"
+
+      - id: lock
+        run: |
+          kref() { jq -r '.nodes["linux-chiappa"].locked.ref // "" | sub("^refs/heads/"; "")' flake.lock; }
+          before=$(kref)
+          nix flake update
+          after=$(kref)
+          echo "kernel_before=$before" >> "$GITHUB_OUTPUT"
+          echo "kernel_after=$after"   >> "$GITHUB_OUTPUT"
+          if git diff --quiet; then echo "changed=false" >> "$GITHUB_OUTPUT"; else echo "changed=true" >> "$GITHUB_OUTPUT"; fi
+          if git diff -U0 flake.lock | grep -q '"linux-chiappa"\|linux-imx-rm'; then echo "kernel_changed=true" >> "$GITHUB_OUTPUT"; else echo "kernel_changed=false" >> "$GITHUB_OUTPUT"; fi
+          {
+            echo 'summary<<EOF'
+            git --no-pager diff --stat
+            echo
+            nix flake metadata --json | jq -r '.locks.nodes | to_entries[] | select(.value.locked != null) | "\(.key): \(.value.locked.rev // .value.locked.url) (\(.value.locked.lastModified | todate))"'
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - if: steps.lock.outputs.changed == 'true'
+        run: nix eval --raw .#nixosConfigurations.example-chiappa.config.system.build.toplevel.drvPath
+
+      - if: steps.lock.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v8
+        with:
+          branch: update/inputs
+          delete-branch: true
+          commit-message: "flake: update inputs (koreader ${{ steps.ko.outputs.after }}, kernel ${{ steps.lock.outputs.kernel_after }})"
+          title: "flake: update inputs (koreader ${{ steps.ko.outputs.after }}, kernel ${{ steps.lock.outputs.kernel_after }})"
+          body: |
+            Weekly input refresh.
+
+            - KoReader: **${{ steps.ko.outputs.before }} → ${{ steps.ko.outputs.after }}**
+              (https://github.com/koreader/koreader/releases/tag/v${{ steps.ko.outputs.after }})
+            - Kernel branch: **${{ steps.lock.outputs.kernel_before }} → ${{ steps.lock.outputs.kernel_after }}**
+            - `nix flake update` for nixpkgs and chiappa
+
+            ```
+            ${{ steps.lock.outputs.summary }}
+            ```
+
+            The reference config evaluated on this runner; nothing was built or booted. A kernel bump needs a local build and a device test before merging.

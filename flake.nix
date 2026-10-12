@@ -20,12 +20,24 @@
       url = "github:gitman-101111/chiappa";
       flake = false;
     };
+
+    linux-chiappa = {
+      url = "git+https://github.com/reMarkable/linux-imx-rm.git?lfs=1&shallow=1";
+      flake = false;
+    };
+
+    koreader = {
+      url = "https://github.com/koreader/koreader/releases/download/v2026.07.1/koreader-remarkable-aarch64-v2026.07.1.zip";
+      flake = false;
+    };
   };
 
   outputs = {
     self,
     nixpkgs,
     chiappa,
+    linux-chiappa,
+    koreader,
     ...
   }: let
     system = "aarch64-linux";
@@ -38,7 +50,10 @@
     # `default` aggregates all subsystems (still device-less: import a device
     # module below, which pulls in the subsystems AND the device's profile).
     nixosModules = {
-      default = import ./modules;
+      default = {
+        imports = [./modules];
+        remarkable.koreader.src = nixpkgs.lib.mkDefault koreader;
+      };
 
       # Device modules: subsystems + that device's facts. Import ONE.
       chiappa = {
@@ -47,6 +62,7 @@
           ./devices/chiappa
         ];
         _module.args.hardware-chiappa = chiappa;
+        _module.args.linux-chiappa = linux-chiappa;
       };
       # ferrari = ...   (reMarkable Paper Pro — contributions welcome; see
       #                  devices/README.md for what a device profile needs)
@@ -64,5 +80,18 @@
     };
 
     formatter = forSystem (pkgs: pkgs.alejandra);
+
+    checks.${system} = {
+      kernel = self.nixosConfigurations.example-chiappa.config.boot.kernelPackages.kernel;
+      koreader =
+        (nixpkgs.lib.nixosSystem {
+          inherit system;
+          modules = [
+            self.nixosModules.chiappa
+            ./example/chiappa.nix
+            {remarkable.koreader.enable = true;}
+          ];
+        }).config.remarkable.koreader.package;
+    };
   };
 }
