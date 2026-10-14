@@ -1,4 +1,4 @@
-# Vendor BSP kernel, built from a COMPLETE config via linuxManualConfig.
+# Device kernel, built from a COMPLETE config via linuxManualConfig.
 # Do NOT regenerate a device's config from a fragment: olddefconfig on a
 # fragment silently drops platform options (on i.MX: CONFIG_ARCH_MXC and with
 # it clocks, pinctrl, power domains, eMMC — everything).
@@ -17,7 +17,7 @@ in {
   options.remarkable.kernel = {
     version = mkOption {
       type = types.str;
-      description = "Kernel version string (matches the BSP source).";
+      description = "Kernel version string, as the source tree's Makefile reports it.";
     };
     modDirVersion = mkOption {
       type = types.str;
@@ -25,11 +25,11 @@ in {
     };
     src = mkOption {
       type = types.path;
-      description = "Kernel source (the vendor BSP tree/tarball).";
+      description = "Kernel source tree or tarball.";
     };
     configFile = mkOption {
       type = types.path;
-      description = "COMPLETE kernel config (vendor config + the device profile's deltas).";
+      description = "COMPLETE kernel config for that source (never a fragment; see the header of this module).";
     };
     patches = mkOption {
       type = types.listOf types.attrs;
@@ -40,12 +40,12 @@ in {
       type = types.raw;
       default = pkgs.stdenv;
       defaultText = lib.literalExpression "pkgs.stdenv";
-      description = "stdenv to build the kernel with (BSP kernels often need a specific gcc generation).";
+      description = "stdenv to build the kernel with.";
     };
     initrdModules = mkOption {
       type = types.listOf types.str;
       default = [];
-      description = "Exact module set stage 1 loads (replaces NixOS's defaults, which assume storage drivers a BSP kernel doesn't build).";
+      description = "Exact module set stage 1 loads (replaces NixOS's defaults, which assume storage drivers the device kernel does not build).";
     };
   };
 
@@ -63,7 +63,7 @@ in {
     # there; NixOS must not try to build/install DTBs itself.
     hardware.deviceTree.enable = lib.mkDefault false;
 
-    # Storage for the root is built INTO the BSP kernel; NixOS's default initrd
+    # Storage for the root is built INTO the device kernel; NixOS's default initrd
     # module set pulls in ahci/nvme/etc. the kernel doesn't build, which fails
     # the module-shrink step. Ship exactly what the device profile asks for.
     boot.initrd.includeDefaultModules = false;

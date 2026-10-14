@@ -63,6 +63,9 @@
       substituteInPlace plugins/autosuspend.koplugin/main.lua \
         --replace-fail "if Device:canPowerOff() then" "if false then -- remarkable-nixos: system owns shutdown" \
         --replace-fail "return Device:canPowerOff() and self.autoshutdown_timeout_seconds > 0" "return false -- remarkable-nixos: system owns shutdown"
+      # Any kernel >= 6.2 without `csl` is taken for the rM2 mainline port.
+      substituteInPlace frontend/device/remarkable/device.lua \
+        --replace-fail "if release and release >= 6.2 and not has_csl then" "if release and release >= 6.2 and not has_csl and not is_rmpp and not is_rmppm then"
     '';
     installPhase = ''
       mkdir -p $out/koreader
@@ -94,8 +97,9 @@
       cp -f ${cfg.userPatches}/*.lua "$KO_HOME/patches/" 2>/dev/null || true
     ''}
     ${lib.concatMapStrings (d: ''
-      cp -f ${d}/*.lua "$KO_HOME/patches/" 2>/dev/null || true
-    '') cfg.extraPatchDirs}
+        cp -f ${d}/*.lua "$KO_HOME/patches/" 2>/dev/null || true
+      '')
+      cfg.extraPatchDirs}
     # Corrupt-cache guard: a hard power-off can damage KoReader's sqlite caches
     # (e.g. bookinfo_cache.sqlite3), and KoReader HANGS at startup reading one
     # instead of rebuilding it — blank screen, deaf to input. Quarantine any
@@ -139,29 +143,31 @@
   # lua just os.execute()s the script path; exit-0 of the check script shows a
   # checkmark. os.execute returns the exit status on LuaJIT (Lua 5.1). Entries
   # with a `group` nest under a submenu of that name; others are top-level.
-  menuCmds = lib.imap0 (i: c: {
-    inherit (c) label group fullRefresh;
-    cmd = pkgs.writeShellScript "koreader-menucmd-${toString i}" c.command;
-    check =
-      if c.checkedCommand != null
-      then pkgs.writeShellScript "koreader-menucheck-${toString i}" c.checkedCommand
-      else null;
-    key = "remarkable_cmd_${toString i}";
-  }) cfg.menuCommands;
+  menuCmds =
+    lib.imap0 (i: c: {
+      inherit (c) label group fullRefresh;
+      cmd = pkgs.writeShellScript "koreader-menucmd-${toString i}" c.command;
+      check =
+        if c.checkedCommand != null
+        then pkgs.writeShellScript "koreader-menucheck-${toString i}" c.checkedCommand
+        else null;
+      key = "remarkable_cmd_${toString i}";
+    })
+    cfg.menuCommands;
 
   # A menu-item table literal (used both top-level and inside a submenu).
-  itemLiteral = e: ''{
-            text = ${builtins.toJSON e.label},
-            ${lib.optionalString (e.check != null) ''checked_func = function() return os.execute("${e.check}") == 0 end,''}
-            callback = function()
-                os.execute("${e.cmd}")
-                require("ui/uimanager"):setDirty("all", ${
+  itemLiteral = e: ''    {
+                text = ${builtins.toJSON e.label},
+                ${lib.optionalString (e.check != null) ''checked_func = function() return os.execute("${e.check}") == 0 end,''}
+                callback = function()
+                    os.execute("${e.cmd}")
+                    require("ui/uimanager"):setDirty("all", ${
       if e.fullRefresh
       then "\"full\""
       else "\"ui\""
     })
-            end,
-        }'';
+                end,
+            }'';
 
   topLevel = lib.filter (e: e.group == null) menuCmds;
   groups = lib.imap0 (i: g: {
@@ -171,24 +177,26 @@
   }) (lib.unique (lib.filter (g: g != null) (map (e: e.group) menuCmds)));
 
   orderKeys = (map (e: e.key) topLevel) ++ (map (g: g.key) groups);
-  menuOrderInserts = lib.concatMapStrings (k: ''
-        if order and order.tools then table.insert(order.tools, 1, "${k}") end
-  '') orderKeys;
+  menuOrderInserts =
+    lib.concatMapStrings (k: ''
+      if order and order.tools then table.insert(order.tools, 1, "${k}") end
+    '')
+    orderKeys;
 
   menuItemDefs =
     (lib.concatMapStrings (e: ''
         self.menu_items.${e.key} = ${itemLiteral e}
-    '')
-    topLevel)
+      '')
+      topLevel)
     + (lib.concatMapStrings (g: ''
-        self.menu_items.${g.key} = {
-            text = ${builtins.toJSON g.name},
-            sub_item_table = {
-    ${lib.concatStringsSep ",\n" (map itemLiteral g.entries)}
-            },
-        }
-    '')
-    groups);
+            self.menu_items.${g.key} = {
+                text = ${builtins.toJSON g.name},
+                sub_item_table = {
+        ${lib.concatStringsSep ",\n" (map itemLiteral g.entries)}
+                },
+            }
+      '')
+      groups);
 
   # Neutralize KoReader's built-in OTA updater. This build ships from the
   # read-only Nix store, so the in-app updater can't overwrite the install —

@@ -43,14 +43,8 @@ jobs:
 
       - id: lock
         run: |
-          kref() { jq -r '.nodes["linux-chiappa"].locked.ref // "" | sub("^refs/heads/"; "")' flake.lock; }
-          before=$(kref)
           nix flake update
-          after=$(kref)
-          echo "kernel_before=$before" >> "$GITHUB_OUTPUT"
-          echo "kernel_after=$after"   >> "$GITHUB_OUTPUT"
           if git diff --quiet; then echo "changed=false" >> "$GITHUB_OUTPUT"; else echo "changed=true" >> "$GITHUB_OUTPUT"; fi
-          if git diff -U0 flake.lock | grep -q '"linux-chiappa"\|linux-imx-rm'; then echo "kernel_changed=true" >> "$GITHUB_OUTPUT"; else echo "kernel_changed=false" >> "$GITHUB_OUTPUT"; fi
           {
             echo 'summary<<EOF'
             git --no-pager diff --stat
@@ -67,18 +61,17 @@ jobs:
         with:
           branch: update/inputs
           delete-branch: true
-          commit-message: "flake: update inputs (koreader ${{ steps.ko.outputs.after }}, kernel ${{ steps.lock.outputs.kernel_after }})"
-          title: "flake: update inputs (koreader ${{ steps.ko.outputs.after }}, kernel ${{ steps.lock.outputs.kernel_after }})"
+          commit-message: "flake: update inputs (koreader ${{ steps.ko.outputs.after }})"
+          title: "flake: update inputs (koreader ${{ steps.ko.outputs.after }})"
           body: |
             Weekly input refresh.
 
             - KoReader: **${{ steps.ko.outputs.before }} → ${{ steps.ko.outputs.after }}**
               (https://github.com/koreader/koreader/releases/tag/v${{ steps.ko.outputs.after }})
-            - Kernel branch: **${{ steps.lock.outputs.kernel_before }} → ${{ steps.lock.outputs.kernel_after }}**
             - `nix flake update` for nixpkgs and chiappa
 
             ```
             ${{ steps.lock.outputs.summary }}
             ```
 
-            The reference config evaluated on this runner; nothing was built or booted. A kernel bump needs a local build and a device test before merging.
+            The reference config evaluated on this runner; nothing was built or booted. The kernel itself is pinned by hand (see README, Updating).

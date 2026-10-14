@@ -33,13 +33,7 @@
     then "gzip"
     else "none";
 
-  # Prefer the vendor-shipped DTB over the kernel-tree one: on the reference
-  # device the kernel-tree DTB hangs early in boot; every boot that has ever
-  # worked used the vendor DTB.
-  dtb =
-    if cfg.vendorDtb != null
-    then cfg.vendorDtb
-    else "${config.boot.kernelPackages.kernel}/dtbs/freescale/${device.dtbName}";
+  dtb = "${config.boot.kernelPackages.kernel}/dtbs/freescale/${device.dtbName}";
   initrd = "${config.system.build.initialRamdisk}/${config.system.boot.loader.initrdFile}";
 
   # U-Boot picks the FIT configuration BY NAME, derived from its fdtfile env
@@ -51,14 +45,16 @@
   #
   # No hash node in config entries — hashes live in the image nodes; FITs that
   # provably boot these devices have bare configs, match that exactly.
-  configurations = lib.concatMapStrings (name: ''
-    ${name} {
-        description = "${name}";
-        kernel = "kernel-1";
-        fdt = "fdt-1";
-        ramdisk = "ramdisk-1";
-    };
-  '') device.boot.fitConfigNames;
+  configurations =
+    lib.concatMapStrings (name: ''
+      ${name} {
+          description = "${name}";
+          kernel = "kernel-1";
+          fdt = "fdt-1";
+          ramdisk = "ramdisk-1";
+      };
+    '')
+    device.boot.fitConfigNames;
 
   its = pkgs.writeText "${device.codename}.its" ''
     /dts-v1/;
@@ -150,16 +146,6 @@ in {
       type = types.bool;
       default = true;
       description = "gzip the kernel inside the FIT (U-Boot decompresses at bootm), shrinking the FIT substantially.";
-    };
-    vendorDtb = mkOption {
-      type = types.nullOr types.path;
-      default = null;
-      description = ''
-        Vendor-shipped DTB to embed in the FIT (extract from a vendor
-        fitImage.ahab or recovery image; not redistributable). When null,
-        falls back to the kernel-tree DTB (remarkable.device.dtbName) — known
-        to hang the reference device; only useful for experiments.
-      '';
     };
     ahabHeader = mkOption {
       type = types.nullOr types.path;

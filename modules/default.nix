@@ -5,9 +5,8 @@
 # every device-specific constant lifted into the remarkable.device.* profile
 # (see profile.nix). Subsystem map:
 #
-#   kernel.nix         BSP kernel via linuxManualConfig: vendor config +
-#                      NixOS deltas (built-in ChipIdea USB, nftables,
-#                      DM_INIT=n, ARM64 features the SoC lacks).
+#   kernel.nix         mainline kernel via linuxManualConfig from the hardware
+#                      layer's complete config and patch series.
 #   boot-image.nix     FIT/AHAB assembly (8 KB vendor header + FIT, gzipped
 #                      kernel) + flashable ext4 rootfsImage with baked
 #                      mountpoints, /init profile symlink, journal dir.

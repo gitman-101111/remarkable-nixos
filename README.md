@@ -74,7 +74,6 @@ rootfs image produces all of these:
 | Option | What to extract |
 |--------|-----------------|
 | `remarkable.boot.ahabHeader` | 8 KB AHAB header (`boot/ahab-header.bin`) |
-| `remarkable.boot.vendorDtb` | your PCBA revision's DTB (`dtb/chiappa-rev-<x>.dtb`; F–K are byte-identical) |
 | `remarkable.eink.vendorRuntime` | the vendor Qt + `libqsgepaper` e-ink runtime bundle |
 | `remarkable.eink.waveforms` | panel waveform/colortable tables (`/usr/share/remarkable`) |
 | `remarkable.eink.screens` | (optional) vendor lifecycle art PNGs |
@@ -126,6 +125,16 @@ Each entry also lands on PATH as `remarkable-app-<name>`. Per-app options:
 `waveform` (2 = GC16 quality, 1 = DU speed) and `keyboardHeight`. A session
 log is written to `$XDG_RUNTIME_DIR/app-<name>.log`.
 
+## Kernel
+
+The kernel is upstream Linux (a kernel.org release, the `linux-mainline`
+input) plus chiappa's [`kernel/`](https://github.com/gitman-101111/chiappa/tree/mainline/kernel)
+series: the board device tree, the reMarkable/NXP leaf drivers, and a display
+bridge mainline lacks. NXP's out-of-tree IW61x WiFi driver is built as an
+external module package from the `nxp-mwifiex` input. The FIT carries the
+kernel-tree DTB, so no vendor DTB is needed. Flash a new kernel to the
+inactive slot first, where U-Boot's three-strike rollback can undo it.
+
 ## PIN lock
 
 ```nix
@@ -165,13 +174,11 @@ What moves, and how each piece is kept current:
 | What | Pinned in | Update path |
 |------|-----------|-------------|
 | KoReader release | `koreader` input in `flake.nix` (URL) + `flake.lock` (hash) | Edit the version in the input URL, then `nix flake update koreader`. Release assets carry the version in their name, so `nix flake update` alone re-locks the same zip; the **update** workflow does the URL edit for you weekly. |
-| Vendor kernel snapshot | `linux-chiappa` input (`git+https://…/linux-imx-rm.git?lfs=1`) + `flake.lock` | `nix flake update`. reMarkable keeps the newest firmware branch as the repo default, so the input floats to it; the release tarball inside is git-LFS and is extracted at build time. `version` comes from the tarball’s Makefile and `modDirVersion` from the vendor config, so nothing else moves. |
 | `nixpkgs`, `chiappa` inputs | `flake.lock` | `nix flake update`. |
-
-Locking `linux-chiappa` downloads the 260 MB tarball as an LFS object (about half a minute); it stays compressed in the store until the kernel builds.
+| Kernel | `linux-mainline` input (kernel.org tarball URL) and `nxp-mwifiex` input (NXP WiFi driver release tag) in `flake.nix` | Move the URL/tag by hand together with chiappa's `kernel/` series — the patches and complete config are pinned to that release; `nix flake update` cannot move either. |
 
 The **update** workflow does all of the above weekly on an arm64 runner —
-bump KoReader, `nix flake update` (which moves the kernel), evaluate the reference
+bump KoReader, `nix flake update` (nixpkgs and chiappa), evaluate the reference
 config (no builds) — and opens one PR. Build locally (`nix build .#checks.aarch64-linux.kernel`) and boot it on a device, then
 merge. Downstream, `nix flake update remarkable-nixos` in your own config
 picks the merged pins up.

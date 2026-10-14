@@ -9,7 +9,6 @@
   # See the hardware layer's docs/obtaining-vendor-blobs.md. NOT redistributable.
   # Option names track the modules as they are ported; current surface:
   # remarkable.boot.ahabHeader = ./artifacts/ahab-header.bin;  # 8 KB pad from a vendor fitImage.ahab
-  # remarkable.boot.vendorDtb = ./artifacts/chiappa-rev-h.dtb; # your PCBA revision's DTB
   # remarkable.eink.vendorRuntime = ./artifacts/eink-runtime;  # vendor Qt + epaper engine
   # remarkable.eink.waveforms = ./artifacts/waveforms;         # panel waveform tables
   # remarkable.eink.screens = ./artifacts/screens;             # lifecycle art PNGs (optional)

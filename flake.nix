@@ -17,12 +17,18 @@
     # Other devices may add their own hardware-layer input alongside this one
     # (or vendor small files directly under devices/<codename>/).
     chiappa = {
-      url = "github:gitman-101111/chiappa";
+      url = "github:gitman-101111/chiappa/mainline";
       flake = false;
     };
 
-    linux-chiappa = {
-      url = "git+https://github.com/reMarkable/linux-imx-rm.git?lfs=1&shallow=1";
+    # Kernel: a kernel.org release pinned together with chiappa's kernel/ series.
+    linux-mainline = {
+      url = "https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.2.10.tar.xz";
+      flake = false;
+    };
+
+    nxp-mwifiex = {
+      url = "github:nxp-imx/mwifiex/lf-6.18.37-2.1.0";
       flake = false;
     };
 
@@ -36,7 +42,8 @@
     self,
     nixpkgs,
     chiappa,
-    linux-chiappa,
+    linux-mainline,
+    nxp-mwifiex,
     koreader,
     ...
   }: let
@@ -62,7 +69,8 @@
           ./devices/chiappa
         ];
         _module.args.hardware-chiappa = chiappa;
-        _module.args.linux-chiappa = linux-chiappa;
+        _module.args.linux-mainline = linux-mainline;
+        _module.args.nxp-mwifiex = nxp-mwifiex;
       };
       # ferrari = ...   (reMarkable Paper Pro — contributions welcome; see
       #                  devices/README.md for what a device profile needs)

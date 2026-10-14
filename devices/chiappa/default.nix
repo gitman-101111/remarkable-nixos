@@ -18,7 +18,7 @@ in {
       height = 1696;
     };
 
-    dtbName = "chiappa-rev-h.dtb";
+    dtbName = "imx93-remarkable-chiappa.dtb";
 
     boot = {
       kernelLoadAddr = "0x80400000";
@@ -57,14 +57,7 @@ in {
     bluetooth.kernelModule = "btnxpuart";
     # IW611 combo chip draws ~2.7 mA through deep suspend when left powered;
     # power.nix unloads these (BT module first) before sleep, reloads after.
-    wifi.kernelModules = ["iw61x_sdw61x" "iw61x_mlan"];
-    # lis2dw12 accelerometer: ~0.8 mA in suspend, nothing consumes it asleep.
-    suspendUnbind = [
-      {
-        driverSysfsPath = "/sys/bus/i2c/drivers/st_lis2dw12_i2c";
-        busDeviceId = "0-0019";
-      }
-    ];
+    wifi.kernelModules = ["moal" "mlan"];
     # The max77818 PMIC (charger + fuel gauge) is armed as a wakeup source, so
     # charger interrupts pull the device out of deep suspend — observed waking
     # a sleeping unit after 84 min on the charger ("PM: Triggering wakeup from
@@ -72,6 +65,10 @@ in {
     # the battery guard only polls awake, the long-standby shutdown is its own
     # RTC alarm, and Type-C renegotiation runs from resumeCommands on resume.
     disarmWakeup = [
+      {
+        subsystem = "platform";
+        kernel = "max77818-fuelgauge";
+      }
       {
         subsystem = "i2c";
         kernel = "0-0066";

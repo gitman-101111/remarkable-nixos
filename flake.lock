@@ -3,15 +3,16 @@
     "chiappa": {
       "flake": false,
       "locked": {
-        "lastModified": 1785253660,
-        "narHash": "sha256-iwNc+dU21kQ+wqGOSPFukOf/p90X13oafd/pu3s9GcM=",
+        "lastModified": 1791982858,
+        "narHash": "sha256-QIA2wE++fl6oyA59VQJLcW5pzlSS1gbhun9++IsEnHU=",
         "owner": "gitman-101111",
         "repo": "chiappa",
-        "rev": "5010b1137bddd7f7a643cd2dc71d41876d25e97b",
+        "rev": "6d4ed5eb1462401a0dd16ce40c4197cf2fbc82a0",
         "type": "github"
       },
       "original": {
         "owner": "gitman-101111",
+        "ref": "mainline",
         "repo": "chiappa",
         "type": "github"
       }
@@ -29,23 +30,17 @@
         "url": "https://github.com/koreader/koreader/releases/download/v2026.07.1/koreader-remarkable-aarch64-v2026.07.1.zip"
       }
     },
-    "linux-chiappa": {
+    "linux-mainline": {
       "flake": false,
       "locked": {
-        "lastModified": 1788895115,
-        "lfs": true,
-        "narHash": "sha256-tafPl1SIMQJzWGxhlSv4q+upEkj0ijbGubPPwLIcjGQ=",
-        "ref": "refs/heads/rmpp_6.12.49_v3.28.x",
-        "rev": "0b33b415dc937ca6a2479d2c45f5af83efe10947",
-        "shallow": true,
-        "type": "git",
-        "url": "https://github.com/reMarkable/linux-imx-rm.git"
+        "lastModified": 1791725270,
+        "narHash": "sha256-9oTKw3t1Q+arT7LulcPDhBw3JhhoHARVVyHz5osmt1w=",
+        "type": "tarball",
+        "url": "https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.2.10.tar.xz"
       },
       "original": {
-        "lfs": true,
-        "shallow": true,
-        "type": "git",
-        "url": "https://github.com/reMarkable/linux-imx-rm.git"
+        "type": "tarball",
+        "url": "https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.2.10.tar.xz"
       }
     },
     "nixpkgs": {
@@ -64,12 +59,30 @@
         "type": "github"
       }
     },
+    "nxp-mwifiex": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1787823899,
+        "narHash": "sha256-Lz4FkeZyVnFFIRnQpEk+/2HtMWstAZ2Z0wdy8zaueWU=",
+        "owner": "nxp-imx",
+        "repo": "mwifiex",
+        "rev": "44f90628e368de23e9991de424fc2a1799c81044",
+        "type": "github"
+      },
+      "original": {
+        "owner": "nxp-imx",
+        "ref": "lf-6.18.37-2.1.0",
+        "repo": "mwifiex",
+        "type": "github"
+      }
+    },
     "root": {
       "inputs": {
         "chiappa": "chiappa",
         "koreader": "koreader",
-        "linux-chiappa": "linux-chiappa",
-        "nixpkgs": "nixpkgs"
+        "linux-mainline": "linux-mainline",
+        "nixpkgs": "nixpkgs",
+        "nxp-mwifiex": "nxp-mwifiex"
       }
     }
   },
