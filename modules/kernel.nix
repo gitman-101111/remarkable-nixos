@@ -36,12 +36,6 @@ in {
       default = [];
       description = "kernelPatches list ({name, patch}) from the device's hardware layer.";
     };
-    stdenv = mkOption {
-      type = types.raw;
-      default = pkgs.stdenv;
-      defaultText = lib.literalExpression "pkgs.stdenv";
-      description = "stdenv to build the kernel with.";
-    };
     initrdModules = mkOption {
       type = types.listOf types.str;
       default = [];
@@ -51,7 +45,7 @@ in {
 
   config = {
     boot.kernelPackages = pkgs.linuxPackagesFor (pkgs.linuxManualConfig {
-      inherit (cfg) version src stdenv;
+      inherit (cfg) version src;
       inherit (cfg) modDirVersion;
       configfile = cfg.configFile;
       # linuxManualConfig parses the config via IFD to derive kernel features.

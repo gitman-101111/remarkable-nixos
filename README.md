@@ -128,7 +128,7 @@ log is written to `$XDG_RUNTIME_DIR/app-<name>.log`.
 ## Kernel
 
 The kernel is upstream Linux (a kernel.org release, the `linux-mainline`
-input) plus chiappa's [`kernel/`](https://github.com/gitman-101111/chiappa/tree/mainline/kernel)
+input) plus chiappa's [`kernel/`](https://github.com/gitman-101111/chiappa/tree/main/kernel)
 series: the board device tree, the reMarkable/NXP leaf drivers, and a display
 bridge mainline lacks. NXP's out-of-tree IW61x WiFi driver is built as an
 external module package from the `nxp-mwifiex` input. The FIT carries the

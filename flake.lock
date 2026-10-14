@@ -3,16 +3,15 @@
     "chiappa": {
       "flake": false,
       "locked": {
-        "lastModified": 1791982858,
-        "narHash": "sha256-QIA2wE++fl6oyA59VQJLcW5pzlSS1gbhun9++IsEnHU=",
+        "lastModified": 1791983588,
+        "narHash": "sha256-8fBgR5qUuOT7eH+rGX3vMVxMFs3JMbabF7eNK/km5/U=",
         "owner": "gitman-101111",
         "repo": "chiappa",
-        "rev": "6d4ed5eb1462401a0dd16ce40c4197cf2fbc82a0",
+        "rev": "f482711d771a27968a00c6ec0c258200acd41754",
         "type": "github"
       },
       "original": {
         "owner": "gitman-101111",
-        "ref": "mainline",
         "repo": "chiappa",
         "type": "github"
       }

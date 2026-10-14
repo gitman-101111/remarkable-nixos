@@ -19,7 +19,7 @@ new baked-in constant, widen the profile surface instead.
 4. Add `nixosModules.<codename>` and an `example/<codename>.nix` in
    `flake.nix`, mirroring the chiappa entries.
 
-Devices sharing the i.MX 93 BSP lineage (Paper Pro family) are expected to
+Devices sharing the i.MX 93 platform (Paper Pro family) are expected to
 reuse the boot/initrd/power stack nearly unchanged; the genuinely per-device
 work is usually panel geometry, waveforms, DTB, input/backlight controllers,
 and partition sizes.

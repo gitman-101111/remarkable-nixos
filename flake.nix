@@ -17,7 +17,7 @@
     # Other devices may add their own hardware-layer input alongside this one
     # (or vendor small files directly under devices/<codename>/).
     chiappa = {
-      url = "github:gitman-101111/chiappa/mainline";
+      url = "github:gitman-101111/chiappa";
       flake = false;
     };
 
