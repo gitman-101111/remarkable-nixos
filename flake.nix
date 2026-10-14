@@ -21,12 +21,6 @@
       flake = false;
     };
 
-    # Kernel: a kernel.org release pinned together with chiappa's kernel/ series.
-    linux-mainline = {
-      url = "https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.2.10.tar.xz";
-      flake = false;
-    };
-
     nxp-mwifiex = {
       url = "github:nxp-imx/mwifiex/lf-6.18.37-2.1.0";
       flake = false;
@@ -42,7 +36,6 @@
     self,
     nixpkgs,
     chiappa,
-    linux-mainline,
     nxp-mwifiex,
     koreader,
     ...
@@ -69,7 +62,6 @@
           ./devices/chiappa
         ];
         _module.args.hardware-chiappa = chiappa;
-        _module.args.linux-mainline = linux-mainline;
         _module.args.nxp-mwifiex = nxp-mwifiex;
       };
       # ferrari = ...   (reMarkable Paper Pro — contributions welcome; see

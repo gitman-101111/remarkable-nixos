@@ -127,8 +127,8 @@ log is written to `$XDG_RUNTIME_DIR/app-<name>.log`.
 
 ## Kernel
 
-The kernel is upstream Linux (a kernel.org release, the `linux-mainline`
-input) plus chiappa's [`kernel/`](https://github.com/gitman-101111/chiappa/tree/main/kernel)
+The kernel is upstream Linux (nixpkgs' `linux_latest`, so it moves with
+`nix flake update`) plus chiappa's [`kernel/`](https://github.com/gitman-101111/chiappa/tree/main/kernel)
 series: the board device tree, the reMarkable/NXP leaf drivers, and a display
 bridge mainline lacks. NXP's out-of-tree IW61x WiFi driver is built as an
 external module package from the `nxp-mwifiex` input. The FIT carries the
@@ -175,7 +175,8 @@ What moves, and how each piece is kept current:
 |------|-----------|-------------|
 | KoReader release | `koreader` input in `flake.nix` (URL) + `flake.lock` (hash) | Edit the version in the input URL, then `nix flake update koreader`. Release assets carry the version in their name, so `nix flake update` alone re-locks the same zip; the **update** workflow does the URL edit for you weekly. |
 | `nixpkgs`, `chiappa` inputs | `flake.lock` | `nix flake update`. |
-| Kernel | `linux-mainline` input (kernel.org tarball URL) and `nxp-mwifiex` input (NXP WiFi driver release tag) in `flake.nix` | Move the URL/tag by hand together with chiappa's `kernel/` series — the patches and complete config are pinned to that release; `nix flake update` cannot move either. |
+| Kernel source | `nixpkgs` input (`pkgs.linux_latest`) | `nix flake update`. chiappa's `kernel/` series is validated on one release; the weekly PR's patch canary reports what stops applying after a bump, and a failing canary means rebasing the series in chiappa first. |
+| WiFi driver | `nxp-mwifiex` input (NXP release tag) in `flake.nix` | Move the tag by hand together with the mwifiex patch in chiappa's `kernel/mwifiex/`. |
 
 The **update** workflow does all of the above weekly on an arm64 runner —
 bump KoReader, `nix flake update` (nixpkgs and chiappa), evaluate the reference

@@ -1,19 +1,19 @@
-# chiappa kernel: upstream Linux plus the hardware layer's kernel/ series and
-# complete config. WiFi (NXP IW611) is NXP's out-of-tree mwifiex, built as an
-# external module package.
+# chiappa kernel: nixpkgs' latest upstream Linux plus the hardware layer's
+# kernel/ series and complete config. The series is validated on one release
+# (kernel/README.md); the weekly update workflow reports which patches stop
+# applying when nixpkgs moves the kernel. WiFi (NXP IW611) is NXP's
+# out-of-tree mwifiex, built as an external module package.
 {
   config,
   pkgs,
   lib,
   hardware-chiappa,
-  linux-mainline,
   nxp-mwifiex,
   ...
 }: let
   kernelDir = "${hardware-chiappa}/kernel";
-  makefile = builtins.readFile "${linux-mainline}/Makefile";
-  field = name: lib.trim (lib.removePrefix "${name} =" (lib.findFirst (lib.hasPrefix "${name} =") "" (lib.splitString "\n" makefile)));
-  version = "${field "VERSION"}.${field "PATCHLEVEL"}.${field "SUBLEVEL"}${field "EXTRAVERSION"}";
+  upstream = pkgs.linux_latest;
+  inherit (upstream) version;
 
   # Re-store the patch and config bytes so the kernel only rebuilds when they
   # change, not on every hardware-layer bump.
@@ -60,7 +60,7 @@ in {
   remarkable.kernel = {
     inherit version configFile;
     modDirVersion = "${version}-chiappa";
-    src = linux-mainline;
+    src = upstream.src;
     patches = map mkPatch patchNames;
     # eMMC, ext4 and the USB gadget are built in; stage 1 only needs the
     # Type-C chain that makes the headless USB link enumerate: fusb303b's

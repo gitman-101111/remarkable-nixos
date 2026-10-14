@@ -29,19 +29,6 @@
         "url": "https://github.com/koreader/koreader/releases/download/v2026.07.1/koreader-remarkable-aarch64-v2026.07.1.zip"
       }
     },
-    "linux-mainline": {
-      "flake": false,
-      "locked": {
-        "lastModified": 1791725270,
-        "narHash": "sha256-9oTKw3t1Q+arT7LulcPDhBw3JhhoHARVVyHz5osmt1w=",
-        "type": "tarball",
-        "url": "https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.2.10.tar.xz"
-      },
-      "original": {
-        "type": "tarball",
-        "url": "https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.2.10.tar.xz"
-      }
-    },
     "nixpkgs": {
       "locked": {
         "lastModified": 1791594108,
@@ -79,7 +66,6 @@
       "inputs": {
         "chiappa": "chiappa",
         "koreader": "koreader",
-        "linux-mainline": "linux-mainline",
         "nixpkgs": "nixpkgs",
         "nxp-mwifiex": "nxp-mwifiex"
       }

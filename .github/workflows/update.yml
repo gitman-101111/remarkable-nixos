@@ -43,7 +43,12 @@ jobs:
 
       - id: lock
         run: |
+          kver() { nix eval --raw .#nixosConfigurations.example-chiappa.config.boot.kernelPackages.kernel.version; }
+          before=$(kver)
           nix flake update
+          after=$(kver)
+          echo "kernel_before=$before" >> "$GITHUB_OUTPUT"
+          echo "kernel_after=$after"   >> "$GITHUB_OUTPUT"
           if git diff --quiet; then echo "changed=false" >> "$GITHUB_OUTPUT"; else echo "changed=true" >> "$GITHUB_OUTPUT"; fi
           {
             echo 'summary<<EOF'
@@ -56,22 +61,57 @@ jobs:
       - if: steps.lock.outputs.changed == 'true'
         run: nix eval --raw .#nixosConfigurations.example-chiappa.config.system.build.toplevel.drvPath
 
+      # Canary: the kernel follows nixpkgs' linux_latest, while chiappa's patch
+      # series is validated on one release. Apply the series to the new source
+      # in order and report what no longer applies, so a breaking bump is
+      # visible in the PR before anyone spends hours building it.
+      - name: Kernel patch canary
+        id: canary
+        if: steps.lock.outputs.changed == 'true'
+        run: |
+          src=$(nix build --no-link --print-out-paths .#nixosConfigurations.example-chiappa.config.boot.kernelPackages.kernel.src)
+          chiappa=$(nix eval --raw --impure --expr '(builtins.getFlake (toString ./.)).inputs.chiappa.outPath')
+          mkdir -p /tmp/k && tar -xf "$src" -C /tmp/k --strip-components=1
+          ok=0; failed=""
+          for p in "$chiappa"/kernel/0*.patch; do
+            if git -C /tmp/k apply --whitespace=nowarn "$p" 2>/tmp/apply.err; then
+              ok=$((ok + 1))
+            else
+              failed="$failed- $(basename "$p")"$'\n'"  $(grep -m1 'error:' /tmp/apply.err | sed 's/^error: //')"$'\n'
+            fi
+          done
+          total=$(ls "$chiappa"/kernel/0*.patch | wc -l)
+          echo "ok=$ok" >> "$GITHUB_OUTPUT"
+          echo "total=$total" >> "$GITHUB_OUTPUT"
+          {
+            echo 'report<<EOF'
+            if [ -z "$failed" ]; then
+              echo "all $total patches apply to ${{ steps.lock.outputs.kernel_after }}"
+            else
+              echo "$ok/$total patches apply to ${{ steps.lock.outputs.kernel_after }}; failing:"
+              printf '%s' "$failed"
+            fi
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
       - if: steps.lock.outputs.changed == 'true'
         uses: peter-evans/create-pull-request@v8
         with:
           branch: update/inputs
           delete-branch: true
-          commit-message: "flake: update inputs (koreader ${{ steps.ko.outputs.after }})"
-          title: "flake: update inputs (koreader ${{ steps.ko.outputs.after }})"
+          commit-message: "flake: update inputs (koreader ${{ steps.ko.outputs.after }}, kernel ${{ steps.lock.outputs.kernel_after }})"
+          title: "flake: update inputs (koreader ${{ steps.ko.outputs.after }}, kernel ${{ steps.lock.outputs.kernel_after }}${{ steps.canary.outputs.ok != steps.canary.outputs.total && ' — PATCHES FAIL' || '' }})"
           body: |
             Weekly input refresh.
 
             - KoReader: **${{ steps.ko.outputs.before }} → ${{ steps.ko.outputs.after }}**
               (https://github.com/koreader/koreader/releases/tag/v${{ steps.ko.outputs.after }})
+            - Kernel (nixpkgs `linux_latest`): **${{ steps.lock.outputs.kernel_before }} → ${{ steps.lock.outputs.kernel_after }}**
+            - Patch canary: ${{ steps.canary.outputs.report }}
             - `nix flake update` for nixpkgs and chiappa
 
             ```
             ${{ steps.lock.outputs.summary }}
             ```
 
-            The reference config evaluated on this runner; nothing was built or booted. The kernel itself is pinned by hand (see README, Updating).
+            The reference config evaluated on this runner; nothing was built or booted. A kernel bump needs a local build and a device test before merging; a failing canary needs chiappa's series rebased first.
