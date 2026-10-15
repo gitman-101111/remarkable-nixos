@@ -46,8 +46,9 @@ in {
     # negotiates on events and can strand the limit at 100 mA; see power.nix).
     charger.sysfsName = "max77818-charger";
     charger.renegotiateSysfsPath = "/sys/bus/i2c/devices/1-0021/queue_charging_negotiation";
-    # ctn730 NFC pen charger draws ~8 mA through deep suspend (~40% of the
-    # standby floor, measured); power.nix unbinds it across sleep.
+    # ctn730 NFC pen charger: unbound across sleep so the pen does not charge
+    # from the battery while the device is asleep (on mainline it costs no
+    # measurable standby draw either way).
     nfc.driverSysfsPath = "/sys/bus/i2c/drivers/nxp,ctn730-rm";
     nfc.busDeviceId = "4-0028";
     # NXP 88W8987 (BT side of the IW611 WiFi/BT combo): boot-time autoload
@@ -55,8 +56,9 @@ in {
     # of boots, leaving the host-wake GPIO storming and aborting every
     # suspend. Loaded after wlan0 exists instead.
     bluetooth.kernelModule = "btnxpuart";
-    # IW611 combo chip draws ~2.7 mA through deep suspend when left powered;
-    # power.nix unloads these (BT module first) before sleep, reloads after.
+    # IW611 combo chip: power.nix unloads these (BT module first) before sleep
+    # and reloads after, so WiFi and BT come back in a known order (no
+    # measurable standby difference on mainline).
     wifi.kernelModules = ["moal" "mlan"];
     # The max77818 PMIC (charger + fuel gauge) is armed as a wakeup source, so
     # charger interrupts pull the device out of deep suspend — observed waking
