@@ -126,11 +126,8 @@
     export SWTFB_HEIGHT=${toString device.panel.height}
     export LD_PRELOAD="${einkShim}/lib/einkbridge-qtfb-shim.so"
     export LD_LIBRARY_PATH="${koDir}/libs''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-    # Silence the "startup script has been updated" nag: KoReader's backend
-    # compares md5(/tmp/koreader.sh) to the installed koreader.sh to detect an
-    # OTA-updated launcher. reader.lua runs directly here (no koreader.sh), so
-    # /tmp/koreader.sh is absent → mismatch → dialog. Mirror it so hashes match.
     cp -f "${koDir}/koreader.sh" /tmp/koreader.sh 2>/dev/null || true
+    cp -f "${koDir}/external.manifest.json" /tmp/external.manifest.json 2>/dev/null || true
     # Wait for the einkbridge socket (KoReader draws through it).
     for _ in $(seq 1 50); do [ -S /tmp/swtfb.ipc ] && break; sleep 0.2; done
     cd "${koDir}"
