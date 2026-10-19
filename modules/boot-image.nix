@@ -196,16 +196,27 @@ in {
       fi
     '';
 
-    # No NixOS-installable bootloader — the FIT ships inside the flashed
-    # image. Replace the installer with a loud no-op so profile updates work
-    # without touching boot.
-    system.build.installBootLoader = pkgs.writeShellScript "remarkable-no-install-bootloader" ''
-      echo "--------------------------------------------------------------------------------"
-      echo "remarkable-nixos: bootloader install skipped."
-      echo "The system closure (rootfs) was updated. If the kernel or initrd changed,"
-      echo "rebuild and deploy the FIT:  system.build.fitImage -> <slot>/boot/fitImage.ahab"
-      echo "--------------------------------------------------------------------------------"
-      exit 0
+    system.systemBuilderCommands = lib.optionalString (cfg.ahabHeader != null) ''
+      ln -s ${fitImage} $out/fitImage.ahab
+    '';
+    system.build.installBootLoader = pkgs.writeShellScript "remarkable-install-fit" ''
+      new="$1"
+      if [ -e "$new/fitImage.ahab" ]; then
+        if ! ${pkgs.diffutils}/bin/cmp -s "$new/fitImage.ahab" /boot/fitImage.ahab; then
+          ${pkgs.coreutils}/bin/install -m 0444 "$new/fitImage.ahab" /boot/.fitImage.ahab.new
+          ${pkgs.coreutils}/bin/sync /boot/.fitImage.ahab.new
+          ${pkgs.coreutils}/bin/mv -f /boot/.fitImage.ahab.new /boot/fitImage.ahab
+          ${pkgs.coreutils}/bin/sync /boot
+          echo "remarkable-nixos: installed /boot/fitImage.ahab"
+        fi
+        exit 0
+      fi
+      same() { [ "$(${pkgs.coreutils}/bin/readlink -f "$new/$1")" = "$(${pkgs.coreutils}/bin/readlink -f "/run/booted-system/$1")" ]; }
+      if same kernel && same initrd; then exit 0; fi
+      echo "remarkable-nixos: kernel/initrd changed but this config cannot build a FIT" >&2
+      echo "(remarkable.boot.ahabHeader unset). Deploy system.build.fitImage to" >&2
+      echo "<slot>/boot/fitImage.ahab before rebooting, or the old kernel boots this closure." >&2
+      exit 1
     '';
     boot.loader.grub.enable = lib.mkForce false;
     boot.loader.generic-extlinux-compatible.enable = lib.mkForce false;

@@ -31,8 +31,8 @@
       mkdir -p "$G/configs/c.1/strings/0x409"
       echo "ecm" > "$G/configs/c.1/strings/0x409/configuration"
       ln -sf "$G/functions/ecm.usb0" "$G/configs/c.1/"
-      ls /sys/class/udc | head -1 > "$G/UDC"
     fi
+    [ -n "$(cat "$G/UDC")" ] || ls /sys/class/udc | head -1 > "$G/UDC"
 
     sleep 1
     ${pkgs.iproute2}/bin/ip addr add ${cfg.hostAddress}/24 dev usb0 2>/dev/null || true
@@ -80,6 +80,7 @@ in {
       description = "USB ECM network gadget";
       wantedBy = ["multi-user.target"];
       after = ["systemd-modules-load.service"];
+      restartIfChanged = false;
       serviceConfig = {
         Type = "oneshot";
         RemainAfterExit = true;

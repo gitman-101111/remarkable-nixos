@@ -47,21 +47,29 @@
     i=0
     while [ ! -e "$persistdev" ] && [ $i -lt 20 ]; do ${bb}/sleep 0.5; i=$((i + 1)); done
     [ -e "$persistdev" ] || exit 0
-    fstype=$(${pkgs.util-linux}/bin/blkid -o value -s TYPE "$persistdev" 2>/dev/null); rc=$?
+    unsafe() { echo "remarkable: $1"; : > /run/remarkable-persist-unsafe; exit 0; }
+    ${lib.optionalString (device.partitions.persistDevice != null) ''
+      # Plain dm-crypt (no header) probes as "no filesystem" too.
+      [ "$(${bb}/readlink -f "$persistdev")" = ${device.partitions.persistDevice} ] \
+        || unsafe "partlabel ${device.partitions.persistPartlabel} is $(${bb}/readlink -f "$persistdev"), not ${device.partitions.persistDevice} — not this layout, leaving it alone (see docs/partitioning.md)"
+    ''}
+    fstype=$(${pkgs.util-linux}/bin/blkid -p -o value -s TYPE "$persistdev" 2>/dev/null); rc=$?
     if [ "$rc" = 2 ]; then
       echo "remarkable: /persist has no filesystem — creating ext4"
       ${e2}/mkfs.ext4 -F -L persist "$persistdev"
     elif [ "$rc" = 0 ] && [ "$fstype" != ext4 ]; then
       # Never reformat a foreign filesystem — worst case it is vendor-owned
-      # user data (see docs/partitioning.md). nofail skips the mount.
-      echo "remarkable: /persist partition holds '$fstype', not ext4 — refusing to touch it (repartition for this layout first; see docs/partitioning.md)"
+      # user data (see docs/partitioning.md).
+      unsafe "/persist partition holds '$fstype', not ext4 — refusing to touch it (repartition for this layout first; see docs/partitioning.md)"
     elif [ "$rc" = 0 ]; then
       ${bb}/timeout 120 ${e2}/e2fsck -p "$persistdev"; frc=$?
-      if [ "$frc" -le 1 ]; then
+      if [ "$frc" -le 2 ]; then
         echo "remarkable: /persist ext4 healthy (e2fsck rc=$frc)"
       else
-        echo "remarkable: WARNING /persist ext4 needs manual fsck (e2fsck rc=$frc) — leaving intact (nofail skips the mount)"
+        unsafe "WARNING /persist ext4 needs manual fsck (e2fsck rc=$frc) — not mounting it"
       fi
+    else
+      unsafe "cannot probe /persist (blkid rc=$rc) — not mounting it"
     fi
     # Ensure /persist/home exists for a /home bind mount.
     ${bb}/mkdir -p /mnt-persist
@@ -202,6 +210,14 @@ in {
           RemainAfterExit = true;
           ExecStart = persistProvision;
         };
+      };
+
+      boot.initrd.systemd.units."sysroot-persist.mount" = {
+        text = ''
+          [Unit]
+          ConditionPathExists=!/run/remarkable-persist-unsafe
+        '';
+        overrideStrategy = "asDropin";
       };
 
       # /persist gets an explicit e2fsck -p in the provision hook instead.

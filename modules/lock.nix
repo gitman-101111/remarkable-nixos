@@ -39,35 +39,21 @@
 
   setpin = pkgs.writeShellScriptBin "remarkable-lock-setpin" ''
     [ -n "$1" ] || { echo "usage: remarkable-lock-setpin <digits>"; exit 2; }
-    mkdir -p "$(dirname ${cfg.pinFile})"
+    ${pkgs.coreutils}/bin/install -d -m 0700 "$(dirname ${cfg.pinFile})"
     exec ${pinpad}/bin/swtfb-pinpad --set ${cfg.pinFile} "$1"
   '';
 
   lockScript = pkgs.writeShellScript "remarkable-lock" ''
     ${geomEnv}
-    # Readiness needs BOTH bridge artifacts: the socket (renderer up) and the
-    # shared framebuffer — during bridge startup they exist at different
-    # moments.
-    for _ in $(seq 1 60); do
-      [ -S /tmp/swtfb.ipc ] && [ -e /dev/shm/swtfb ] && break
-      sleep 1
-    done
-    # On resume, the sleep screen's ExecStop restores the saved app frame and
-    # then deletes /run/swtfb.save — draw the pad only after that, or the
-    # restore paints over it. At boot the file never exists (loop exits
-    # immediately).
-    for _ in $(seq 1 40); do
-      [ ! -e /run/swtfb.save ] && break
-      sleep 0.5
-    done
     # The pad clobbers the shared framebuffer and the frozen app never learns
     # of it, so snapshot the app's frame first — same trick as the sleep screen
     # and the app launcher. Without this the panel keeps showing the pad after
     # unlock (it is bistable, and the app only repaints on input), so the
     # reader stays hidden until the screen is tapped.
-    ${pkgs.coreutils}/bin/cp /dev/shm/swtfb /run/swtfb.lock.save 2>/dev/null || true
+    ${pkgs.coreutils}/bin/mv -f /run/swtfb.save /run/swtfb.lock.save 2>/dev/null \
+      || ${pkgs.coreutils}/bin/cp /dev/shm/swtfb /run/swtfb.lock.save 2>/dev/null || true
     # Freeze the reader app so it cannot repaint over the pad (a no-op at boot,
-    # where it is not yet running); always thaw, even if the pad is killed.
+    # where it is not yet running); thawed on unlock or pad failure.
     ${freezeCmds "STOP"}
     thaw() {
       if [ -f /run/swtfb.lock.save ]; then
@@ -76,25 +62,31 @@
       fi
       ${freezeCmds "CONT"}
     }
+    killed() {
+      trap - EXIT
+      ${pkgs.coreutils}/bin/mv -n /run/swtfb.lock.save /run/swtfb.save 2>/dev/null || true
+      exit 143
+    }
     trap thaw EXIT
-    # Retry transient failures (a bridge restart recreates both artifacts).
+    trap killed TERM
     # Exit 0 = unlocked or no PIN set; nonzero = could not run.
-    for _ in 1 2 3; do
-      ${pinpad}/bin/swtfb-pinpad ${cfg.pinFile} && exit 0
-      sleep 2
-    done
-    exit 1
+    ${pinpad}/bin/swtfb-pinpad ${cfg.pinFile}
+  '';
+
+  startGated = lib.optionalString (cfg.gateUnits != []) ''
+    ${systemctl} start --no-block ${lib.escapeShellArgs cfg.gateUnits}
   '';
 
   # ExecStopPost for both lock units. Only the timeout case suspends: a
   # `systemctl stop` must not become a suspend — power.nix cancels this unit's
-  # job on the long-standby wake while racing a poweroff — and an exit-code
-  # failure has already thawed the reader, whose own idle-suspend then covers
-  # it. Suspending (rather than unlocking or powering off) keeps the device
-  # locked: the next wake re-runs the resume lock.
-  timeoutSuspend = pkgs.writeShellScript "remarkable-lock-timeout-suspend" ''
-    [ "$SERVICE_RESULT" = timeout ] || exit 0
-    ${systemctl} suspend
+  # job on the long-standby wake while racing a poweroff. Suspending (rather
+  # than unlocking or powering off) keeps the device locked: the next wake
+  # re-runs the resume lock.
+  lockStopPost = pkgs.writeShellScript "remarkable-lock-stop-post" ''
+    case "$SERVICE_RESULT" in
+      timeout) ${systemctl} suspend ;;
+      exit-code) ${startGated} ;;
+    esac
   '';
 in {
   options.remarkable.lock = {
@@ -109,6 +101,12 @@ in {
       default = lib.optional config.remarkable.koreader.enable "koreader.service";
       defaultText = lib.literalExpression ''lib.optional config.remarkable.koreader.enable "koreader.service"'';
       description = "Systemd units SIGSTOP'd while the lock pad is shown (so the running app cannot repaint over it) and SIGCONT'd after unlock.";
+    };
+    gateUnits = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = lib.optional (config.remarkable.koreader.enable && config.remarkable.koreader.autostart) "koreader.service";
+      defaultText = lib.literalExpression ''lib.optional (config.remarkable.koreader.enable && config.remarkable.koreader.autostart) "koreader.service"'';
+      description = "Systemd units started by an unlock instead of by boot: removed from their WantedBy= targets and started once a lock pad is passed (boot or resume).";
     };
     resumeTimeout = lib.mkOption {
       type = lib.types.nullOr lib.types.str;
@@ -134,7 +132,7 @@ in {
     };
   };
 
-  config = lib.mkIf cfg.enable {
+  config = lib.mkIf cfg.enable (lib.mkMerge [{
     environment.systemPackages = [setpin];
 
     # Boot: after the splash (drawn = bridge fully ready; the pad paints over
@@ -144,7 +142,7 @@ in {
       description = "PIN lock (boot)";
       wantedBy = ["multi-user.target"];
       after = ["remarkable-eink.service" "remarkable-screen-poweron.service"];
-      requires = ["remarkable-eink.service"];
+      wants = ["remarkable-eink.service"];
       # Never re-run mid-session. switch-to-configuration otherwise restarts
       # this whenever the lock script changes, which re-locks an already
       # unlocked device, blocks the deploy on physical PIN entry, and paints
@@ -155,13 +153,13 @@ in {
           Type = "oneshot";
           RemainAfterExit = true;
           ExecStart = lockScript;
+          ExecStartPost = pkgs.writeShellScript "remarkable-lock-start-gated" startGated;
+          ExecStopPost = lockStopPost;
         }
         // lib.optionalAttrs (cfg.bootTimeout != null) {
           TimeoutStartSec = cfg.bootTimeout;
-          ExecStopPost = timeoutSuspend;
         };
     };
-    systemd.services.koreader.after = ["remarkable-lock-boot.service"];
 
     # Resume: runs after each suspend cycle completes.
     systemd.services.remarkable-lock-resume = {
@@ -172,11 +170,18 @@ in {
         {
           Type = "oneshot";
           ExecStart = lockScript;
+          ExecStartPost = pkgs.writeShellScript "remarkable-lock-start-gated" startGated;
+          ExecStopPost = lockStopPost;
         }
         // lib.optionalAttrs (cfg.resumeTimeout != null) {
           TimeoutStartSec = cfg.resumeTimeout;
-          ExecStopPost = timeoutSuspend;
         };
     };
-  };
+  }
+  {
+    systemd.services = lib.genAttrs (map (lib.removeSuffix ".service") cfg.gateUnits) (_: {
+      wantedBy = lib.mkForce [];
+      after = ["remarkable-lock-boot.service"];
+    });
+  }]);
 }

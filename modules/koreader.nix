@@ -124,6 +124,7 @@
     # Panel geometry for the shim's fake /dev/fb0 (from the device profile).
     export SWTFB_WIDTH=${toString device.panel.width}
     export SWTFB_HEIGHT=${toString device.panel.height}
+    export SWTFB_REFRESH_COUNT=${device.eink.vpddSysfsPath}/refresh_count
     export LD_PRELOAD="${einkShim}/lib/einkbridge-qtfb-shim.so"
     export LD_LIBRARY_PATH="${koDir}/libs''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
     cp -f "${koDir}/koreader.sh" /tmp/koreader.sh 2>/dev/null || true
@@ -140,13 +141,18 @@
   # lua just os.execute()s the script path; exit-0 of the check script shows a
   # checkmark. os.execute returns the exit status on LuaJIT (Lua 5.1). Entries
   # with a `group` nest under a submenu of that name; others are top-level.
+  cleanEnv = "unset LD_PRELOAD LD_LIBRARY_PATH\n";
+  nmcliClean = pkgs.writeShellScript "koreader-nmcli" ''
+    ${cleanEnv}exec ${pkgs.networkmanager}/bin/nmcli "$@"
+  '';
+
   menuCmds =
     lib.imap0 (i: c: {
       inherit (c) label group fullRefresh;
-      cmd = pkgs.writeShellScript "koreader-menucmd-${toString i}" c.command;
+      cmd = pkgs.writeShellScript "koreader-menucmd-${toString i}" (cleanEnv + c.command);
       check =
         if c.checkedCommand != null
-        then pkgs.writeShellScript "koreader-menucheck-${toString i}" c.checkedCommand
+        then pkgs.writeShellScript "koreader-menucheck-${toString i}" (cleanEnv + c.checkedCommand)
         else null;
       key = "remarkable_cmd_${toString i}";
     })
@@ -158,6 +164,7 @@
                 ${lib.optionalString (e.check != null) ''checked_func = function() return os.execute("${e.check}") == 0 end,''}
                 callback = function()
                     os.execute("${e.cmd}")
+                    require("device").input:inhibitInputUntil(true)
                     require("ui/uimanager"):setDirty("all", ${
       if e.fullRefresh
       then "\"full\""
@@ -246,7 +253,7 @@
   # whenever NetworkManager is enabled; loaded at priority 2 so it wins over the
   # wpa methods. Note the ''' below (an escaped '' — POSIX single-quote quoting)
   # and ${device.wifi.interface} interpolation.
-  wifiPatch = pkgs.writeTextDir "2-nmcli-wifi.lua" ''
+  wifiPatch = pkgs.writeTextDir "2-nmcli-wifi.lua" (builtins.replaceStrings ["\"nmcli "] ["\"${nmcliClean} "] ''
     -- Drive KoReader's WiFi via NetworkManager (nmcli). KoReader's reMarkable
     -- profile hardcodes a wpa_supplicant backend, so its WiFi menu is inert on
     -- this stack; override NetworkMgr's device primitives to use nmcli instead.
@@ -344,7 +351,7 @@
     function NetworkMgr:releaseIP() end
 
     logger.info("[nmcli-wifi] NetworkMgr overridden to use NetworkManager (nmcli)")
-  '';
+  '');
 
   # Priority 2 ("late") — applied once UIManager is ready, which is when the
   # menu tables exist to hook. KoReader ONLY runs applyPatches for priorities

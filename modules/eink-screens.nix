@@ -55,6 +55,8 @@
   # explicitly regardless so the system never relies on compiled-in values).
   geomEnv = "SWTFB_WIDTH=${toString device.panel.width} SWTFB_HEIGHT=${toString device.panel.height}";
   show = frame: "${geomEnv} ${einkShow}/bin/eink-show ${frame}";
+  finalFrameMarker = cfg.finalFrameMarker;
+  showLanded = frame: "${geomEnv} SWTFB_REFRESH_COUNT=${device.eink.vpddSysfsPath}/refresh_count ${einkShow}/bin/eink-show --wait ${frame}";
 in {
   options.remarkable.eink.screens = lib.mkOption {
     type = lib.types.nullOr lib.types.path;
@@ -78,8 +80,16 @@ in {
     description = "Internal: command to display the low-battery frame.";
   };
 
+  options.remarkable.eink.finalFrameMarker = lib.mkOption {
+    type = lib.types.str;
+    default = "/run/remarkable-final-frame";
+    readOnly = true;
+    internal = true;
+    description = "Internal: present when the frame on the panel is the last one before power-off; the shutdown screen then draws nothing.";
+  };
+
   config = lib.mkIf (cfg.enable && cfg.screens != null) {
-    remarkable.eink.lowBatteryShow = show frames.lowbatt;
+    remarkable.eink.lowBatteryShow = showLanded frames.lowbatt;
 
     systemd.services = {
       # KoReader starts only after the splash has drawn: without this it races
@@ -125,15 +135,21 @@ in {
         description = "e-ink shutdown/reboot screen";
         wantedBy = ["multi-user.target"];
         after = ["remarkable-eink.service"];
+        before = [
+          "koreader.service"
+          "remarkable-lock-boot.service"
+          "remarkable-lock-resume.service"
+        ];
         serviceConfig = {
           Type = "oneshot";
           RemainAfterExit = true;
           ExecStart = "${pkgs.coreutils}/bin/true";
           ExecStop = pkgs.writeShellScript "remarkable-screen-shutdown" ''
+            [ -e ${finalFrameMarker} ] && exit 0
             if ${config.systemd.package}/bin/systemctl list-jobs 2>/dev/null | grep -q 'reboot.target'; then
-              ${show frames.reboot}
+              ${showLanded frames.reboot}
             else
-              ${show frames.poweroff}
+              ${showLanded frames.poweroff}
             fi
           '';
         };
@@ -141,11 +157,8 @@ in {
 
       # Sleep: draw the sleep frame on the way down, restore the app's frame
       # on resume. Three subtleties:
-      #  - The show client returns once the update is QUEUED; the panel
-      #    refresh takes ~1 s. This service is Before=sleep.target, so the
-      #    settle sleep holds the suspend until the frame has physically
-      #    landed (without it, the system freezes mid-refresh and the app
-      #    stays on the panel).
+      #  - The draw must land before the freeze (this is Before=sleep.target),
+      #    or the system freezes mid-refresh and the app stays on the panel.
       #  - The EPD regulator holds panel power for `vpdd_length` ms after
       #    every refresh (vendor engine sets 30000) and REFUSES to suspend
       #    while that timer runs ("Can't suspend, vpdd timer running" →
@@ -168,18 +181,23 @@ in {
           RemainAfterExit = true;
           ExecStart = pkgs.writeShellScript "remarkable-screen-sleep" ''
             V=${device.eink.vpddSysfsPath}
-            cp /dev/shm/swtfb /run/swtfb.save 2>/dev/null || true
+            ${
+              if config.remarkable.lock.enable
+              then "[ -e /run/swtfb.save ] || cp /dev/shm/swtfb /run/swtfb.save 2>/dev/null || true"
+              else "cp /dev/shm/swtfb /run/swtfb.save 2>/dev/null || true"
+            }
             echo 0 > "$V/vpdd_length" 2>/dev/null || true
-            ${show frames.suspend}
-            sleep 3
+            ${showLanded frames.suspend}
           '';
           ExecStop = pkgs.writeShellScript "remarkable-screen-wake" ''
             V=${device.eink.vpddSysfsPath}
             echo 30000 > "$V/vpdd_length" 2>/dev/null || true
-            if [ -f /run/swtfb.save ]; then
-              ${geomEnv} ${einkShow}/bin/eink-show /run/swtfb.save 2>/dev/null || true
-              rm -f /run/swtfb.save
-            fi
+            ${lib.optionalString (!config.remarkable.lock.enable) ''
+              if [ -f /run/swtfb.save ]; then
+                ${geomEnv} ${einkShow}/bin/eink-show /run/swtfb.save 2>/dev/null || true
+                rm -f /run/swtfb.save
+              fi
+            ''}
           '';
         };
       };

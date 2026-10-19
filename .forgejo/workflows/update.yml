@@ -1,0 +1,192 @@
+name: update
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+    inputs:
+      koreader:
+        description: "KoReader version (e.g. 2026.07.1); empty = newest stable"
+        required: false
+        default: ""
+
+# Forgejo twin of .github/workflows/update.yml. `runs-on` must name a label
+# your runner registered; without aarch64 the toplevel eval is skipped (the
+# kernel config is read via IFD).
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    env:
+      KERNEL: .#nixosConfigurations.example-chiappa.config.boot.kernelPackages.kernel
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@v23
+
+      - name: Point the koreader input at the newest stable release
+        id: ko
+        env:
+          WANT: ${{ inputs.koreader }}
+        run: |
+          jq() { nix shell --inputs-from . nixpkgs#jq -c jq "$@"; }
+          ver() { grep -oE 'koreader-remarkable-aarch64-v[0-9]{4}\.[0-9]{2}(\.[0-9]+)?\.zip' flake.nix | head -1 | grep -oE '[0-9]{4}\.[0-9]{2}(\.[0-9]+)?'; }
+          before=$(ver)
+          want="${WANT#v}"
+          if [ -z "$want" ]; then
+            want=$(curl -fsSL https://api.github.com/repos/koreader/koreader/releases/latest | jq -r '.tag_name' | sed 's/^v//')
+          fi
+          if [ "$want" != "$before" ]; then
+            url="https://github.com/koreader/koreader/releases/download/v${want}/koreader-remarkable-aarch64-v${want}.zip"
+            curl -fsSLI -o /dev/null "$url"
+            sed -i "s|v${before}/koreader-remarkable-aarch64-v${before}\.zip|v${want}/koreader-remarkable-aarch64-v${want}.zip|" flake.nix
+            grep -q "$url" flake.nix
+          fi
+          echo "before=$before" >> "$GITHUB_OUTPUT"
+          echo "after=$want"    >> "$GITHUB_OUTPUT"
+
+      - id: lock
+        run: |
+          kver() { nix eval --raw "$KERNEL.version"; }
+          before=$(kver)
+          nix flake update
+          after=$(kver)
+          echo "kernel_before=$before" >> "$GITHUB_OUTPUT"
+          echo "kernel_after=$after"   >> "$GITHUB_OUTPUT"
+          if git diff --quiet; then echo "changed=false" >> "$GITHUB_OUTPUT"; else echo "changed=true" >> "$GITHUB_OUTPUT"; fi
+          {
+            echo 'summary<<EOF'
+            git --no-pager diff --stat
+            echo
+            nix flake metadata --json | nix shell --inputs-from . nixpkgs#jq -c jq -r '.locks.nodes | to_entries[] | select(.value.locked != null) | "\(.key): \(.value.locked.rev // .value.locked.url) (\(.value.locked.lastModified | todate))"'
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Evaluate the reference config
+        id: eval
+        if: steps.lock.outputs.changed == 'true'
+        run: |
+          if [ "$(uname -m)" != "aarch64" ] && ! nix config show extra-platforms 2>/dev/null | grep -q aarch64-linux; then
+            echo "report=skipped: needs an arm64 runner (or aarch64 emulation in Nix)" >> "$GITHUB_OUTPUT"
+          else
+            nix eval --raw .#nixosConfigurations.example-chiappa.config.system.build.toplevel.drvPath
+            echo "report=evaluates" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Kernel patch canary
+        id: canary
+        if: steps.lock.outputs.changed == 'true'
+        run: |
+          src=$(nix build --inputs-from . --no-link --print-out-paths 'nixpkgs#linux_latest.src')
+          mkdir -p /tmp/k && tar -xf "$src" -C /tmp/k --strip-components=1
+          ok=0; total=0; failed=""; fuzzy=""
+          for p in $(nix eval --raw "$KERNEL.patches" --apply 'ps: builtins.concatStringsSep "\n" ps'); do
+            total=$((total + 1))
+            out=$(cd /tmp/k && patch -p1 -N --no-backup-if-mismatch < "$p" 2>&1) || true
+            if echo "$out" | grep -qE 'FAILED|can.t find file|hunks? ignored'; then
+              failed="$failed- $(basename "$p")"$'\n'"  $(echo "$out" | grep -m1 -E 'FAILED|can.t find file|ignored')"$'\n'
+            else
+              ok=$((ok + 1))
+              if echo "$out" | grep -q 'fuzz'; then
+                fuzzy="$fuzzy- $(basename "$p"): $(echo "$out" | grep -c fuzz) hunk(s) with fuzz"$'\n'
+              fi
+            fi
+          done
+          echo "ok=$ok" >> "$GITHUB_OUTPUT"
+          echo "total=$total" >> "$GITHUB_OUTPUT"
+          {
+            echo 'report<<EOF'
+            if [ -z "$failed" ]; then
+              echo "all $total patches apply to ${{ steps.lock.outputs.kernel_after }}"
+            else
+              echo "$ok/$total patches apply to ${{ steps.lock.outputs.kernel_after }}; failing:"
+              printf '%s' "$failed"
+            fi
+            if [ -n "$fuzzy" ]; then
+              echo "applied with fuzz (verify placement):"
+              printf '%s' "$fuzzy"
+            fi
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      # `make oldconfig` silently drops options the new source no longer defines.
+      - name: Kernel config canary
+        id: config
+        if: steps.lock.outputs.changed == 'true'
+        run: |
+          chiappa=$(nix eval --raw --impure --expr '(builtins.getFlake (toString ./.)).inputs.chiappa.outPath')
+          find /tmp/k -name 'Kconfig*' -print0 \
+            | xargs -0 grep -hoE '^[[:space:]]*(menu)?config[[:space:]]+[A-Z0-9_]+' \
+            | awk '{print $2}' | sort -u > /tmp/defined
+          grep -oE '^CONFIG_[A-Z0-9_]+=[ym]' "$chiappa/kernel/config-chiappa-mainline.aarch64" | sed 's/^CONFIG_//; s/=.*//' | sort -u > /tmp/enabled
+          missing=$(comm -23 /tmp/enabled /tmp/defined)
+          if [ -z "$missing" ]; then
+            echo "report=every enabled option is still defined on ${{ steps.lock.outputs.kernel_after }}" >> "$GITHUB_OUTPUT"
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          else
+            {
+              echo 'report<<EOF'
+              echo "enabled options no longer defined on ${{ steps.lock.outputs.kernel_after }} (dropped silently by oldconfig; a failing patch's own symbols also land here):"
+              echo "$missing" | sed 's/^/- CONFIG_/'
+              echo 'EOF'
+            } >> "$GITHUB_OUTPUT"
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open or update pull request
+        if: steps.lock.outputs.changed == 'true'
+        env:
+          TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          API: ${{ github.api_url }}
+          SERVER: ${{ github.server_url }}
+          BASE: ${{ github.ref_name }}
+          KO_BEFORE: ${{ steps.ko.outputs.before }}
+          KO_AFTER: ${{ steps.ko.outputs.after }}
+          KERNEL_BEFORE: ${{ steps.lock.outputs.kernel_before }}
+          KERNEL_AFTER: ${{ steps.lock.outputs.kernel_after }}
+          EVAL: ${{ steps.eval.outputs.report }}
+          CANARY: ${{ steps.canary.outputs.report }}
+          CANARY_OK: ${{ steps.canary.outputs.ok }}
+          CANARY_TOTAL: ${{ steps.canary.outputs.total }}
+          CONFIG: ${{ steps.config.outputs.report }}
+          CONFIG_OK: ${{ steps.config.outputs.ok }}
+          SUMMARY: ${{ steps.lock.outputs.summary }}
+        run: |
+          set -eu
+          jq() { nix shell --inputs-from . nixpkgs#jq -c jq "$@"; }
+          git config user.name "forgejo-actions"
+          git config user.email "forgejo-actions@noreply.${SERVER#*://}"
+          git checkout -B update/inputs
+          git add flake.nix flake.lock
+          git commit -m "flake: update inputs (koreader $KO_AFTER, kernel $KERNEL_AFTER)"
+          git push --force "${SERVER%%://*}://oauth2:${TOKEN}@${SERVER#*://}/${REPO}.git" update/inputs
+
+          title="flake: update inputs (koreader $KO_AFTER, kernel $KERNEL_AFTER)"
+          if [ "$CANARY_OK" != "$CANARY_TOTAL" ] || [ "$CONFIG_OK" = "false" ]; then
+            title="$title — KERNEL CANARY FAILS"
+          fi
+          body=$(cat <<EOF
+          Weekly input refresh.
+
+          - KoReader: **$KO_BEFORE → $KO_AFTER**
+            (https://github.com/koreader/koreader/releases/tag/v$KO_AFTER)
+          - Kernel (nixpkgs \`linux_latest\`): **$KERNEL_BEFORE → $KERNEL_AFTER**
+          - Reference config: $EVAL
+          - Patch canary: $CANARY
+          - Config canary: $CONFIG
+          - \`nix flake update\` for nixpkgs and chiappa
+
+          \`\`\`
+          $SUMMARY
+          \`\`\`
+
+          Evaluated on a runner; nothing was built or booted. A kernel bump needs a local build and a device test before merging; a failing canary needs chiappa's series rebased (or its config updated) first.
+          EOF
+          )
+          auth="Authorization: token $TOKEN"
+          existing=$(curl -fsS -H "$auth" "$API/repos/$REPO/pulls?state=open&limit=50" | jq -r '.[] | select(.head.ref == "update/inputs") | .number' | head -1)
+          payload=$(jq -n --arg t "$title" --arg b "$body" --arg h update/inputs --arg base "$BASE" '{title: $t, body: $b, head: $h, base: $base}')
+          if [ -n "$existing" ]; then
+            curl -fsS -X PATCH -H "$auth" -H 'Content-Type: application/json' -d "$payload" "$API/repos/$REPO/pulls/$existing" >/dev/null
+            echo "updated PR #$existing"
+          else
+            curl -fsS -X POST -H "$auth" -H 'Content-Type: application/json' -d "$payload" "$API/repos/$REPO/pulls" | jq -r '"opened PR #\(.number)"'
+          fi

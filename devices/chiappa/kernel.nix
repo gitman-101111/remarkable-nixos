@@ -15,9 +15,10 @@
   upstream = pkgs.linux_latest;
   inherit (upstream) version;
 
+  upstreamed = lib.optional (lib.versionAtLeast version "7.3") "0003-";
   # Re-store the patch and config bytes so the kernel only rebuilds when they
   # change, not on every hardware-layer bump.
-  patchNames = lib.sort lib.lessThan (lib.filter (lib.hasSuffix ".patch") (builtins.attrNames (builtins.readDir kernelDir)));
+  patchNames = lib.sort lib.lessThan (lib.filter (n: lib.hasSuffix ".patch" n && !lib.any (p: lib.hasPrefix p n) upstreamed) (builtins.attrNames (builtins.readDir kernelDir)));
   mkPatch = fname: {
     name = lib.removeSuffix ".patch" fname;
     patch = builtins.toFile fname (builtins.readFile "${kernelDir}/${fname}");
@@ -59,7 +60,8 @@
 in {
   remarkable.kernel = {
     inherit version configFile;
-    modDirVersion = "${version}-chiappa";
+    # nixpkgs versions x.y.0 releases "x.y".
+    modDirVersion = "${lib.versions.pad 3 version}-chiappa";
     src = upstream.src;
     patches = map mkPatch patchNames;
     # eMMC, ext4 and the USB gadget are built in; stage 1 only needs the

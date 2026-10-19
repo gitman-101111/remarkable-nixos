@@ -29,13 +29,17 @@
   # references only symbols that exist at runtime in vendor Qt 6.8.2.
   # Explicit -I/-L (no qt in buildInputs) keeps nixpkgs Qt libs OUT of the
   # link path. patchelf then repoints the ELF interpreter + rpath at the
-  # nix-store bundle.
+  # nix-store bundle. DT_RPATH, not RUNPATH: it also serves the vendor libs'
+  # deps and dlopen()ed plugins, so no LD_LIBRARY_PATH (which would leak the
+  # vendor libc into the shells libqsgepaper spawns).
   einkbridge = pkgs.stdenv.mkDerivation {
     pname = "einkbridge";
     version = "3";
     src = "${einkSrc}/src";
     nativeBuildInputs = [pkgs.patchelf];
     dontWrapQtApps = true;
+    # fixup's --shrink-rpath would turn the DT_RPATH into RUNPATH.
+    dontPatchELF = true;
     buildPhase = ''
       runHook preBuild
       $CXX -O2 -fPIE -std=c++17 \
@@ -56,7 +60,7 @@
       runHook preInstall
       install -Dm755 einkbridge $out/bin/einkbridge
       patchelf --set-interpreter ${cfg.vendorRuntime}/lib/ld-linux-aarch64.so.1 \
-               --set-rpath ${cfg.vendorRuntime}/lib $out/bin/einkbridge
+               --force-rpath --set-rpath ${cfg.vendorRuntime}/lib $out/bin/einkbridge
       runHook postInstall
     '';
   };
@@ -65,7 +69,11 @@
     # Kill anything holding the DRM device (stale from an unclean exit).
     # fuser scans /proc in C; an equivalent per-fd shell loop costs ~8 s of
     # fork/exec on this CPU and dominated the bridge's start-to-render time.
-    ${pkgs.psmisc}/bin/fuser -k /dev/dri/card* 2>/dev/null || true
+    for c in /sys/class/drm/card[0-9]*; do
+      case "''${c##*/}" in *-*) continue ;; esac # connectors (card0-LVDS-1)
+      [ "$(${pkgs.coreutils}/bin/basename "$(${pkgs.coreutils}/bin/readlink -f "$c/device")")" = vkms ] && continue
+      ${pkgs.psmisc}/bin/fuser -k "/dev/dri/''${c##*/}" 2>/dev/null || true
+    done
     rm -f /tmp/epframebuffer.lock /tmp/swtfb.ipc /dev/shm/swtfb
     [ -f /tmp/epd.lock ] || { touch /tmp/epd.lock; chmod +x /tmp/epd.lock; }
 
@@ -78,7 +86,7 @@
     # qml). Do NOT mix in nixpkgs Qt plugins/qml.
     export QT_QPA_PLATFORM=epaper
     export QT_QUICK_BACKEND=epaper
-    export LD_LIBRARY_PATH=${cfg.vendorRuntime}/lib
+    unset LD_LIBRARY_PATH # libraries come from the binary's DT_RPATH
     export QT_PLUGIN_PATH=${cfg.vendorRuntime}/plugins
     export QT_QPA_PLATFORM_PLUGIN_PATH=${cfg.vendorRuntime}/plugins/platforms
     export QML2_IMPORT_PATH=${cfg.vendorRuntime}/qml

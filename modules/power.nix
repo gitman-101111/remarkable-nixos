@@ -33,35 +33,38 @@
   hasChargerWatchdog =
     device.charger.sysfsName != null && device.charger.renegotiateSysfsPath != null;
 
-  powerd = pkgs.writeShellScript "remarkable-powerd" ''
+  batteryCheck = pkgs.writeShellScript "remarkable-battery-check" ''
     BAT=/sys/class/power_supply/${device.battery.sysfsName}
     ${lib.optionalString hasChargerWatchdog ''
       CHG=/sys/class/power_supply/${device.charger.sysfsName}
     ''}
-    while :; do
-      soc=$(cat "$BAT/capacity" 2>/dev/null || echo 100)
-      status=$(cat "$BAT/status" 2>/dev/null || echo Unknown)
-      ${lib.optionalString hasChargerWatchdog ''
+    soc=$(cat "$BAT/capacity" 2>/dev/null || echo 100)
+    status=$(cat "$BAT/status" 2>/dev/null || echo Unknown)
+    ${lib.optionalString hasChargerWatchdog ''
       # Recover a stranded input-current limit: charger online but limit at
       # the 100 mA floor, or discharging on live input → renegotiate.
       if [ "$(cat "$CHG/online" 2>/dev/null)" = "1" ]; then
         cur=$(cat "$CHG/current_max" 2>/dev/null || echo 0)
+        now=$(date +%s); last=$(cat /run/remarkable-renegotiated 2>/dev/null || echo 0)
         if [ "$cur" -le 100000 ] || [ "$status" = "Discharging" ]; then
-          echo 1 > ${device.charger.renegotiateSysfsPath} 2>/dev/null || true
+          if [ $((now - last)) -ge 30 ]; then
+            echo "$now" > /run/remarkable-renegotiated
+            echo 1 > ${device.charger.renegotiateSysfsPath} 2>/dev/null || true
+          else
+            ${pkgs.systemd}/bin/systemd-run --on-active=$((30 - (now - last))) \
+              --unit=remarkable-battery-recheck --collect \
+              ${pkgs.systemd}/bin/systemctl start --no-block remarkable-battery-guard.service \
+              >/dev/null 2>&1 || true
+          fi
         fi
       fi
     ''}
-      if [ "$soc" -le ${toString cfg.lowSoc} ] && [ "$status" = "Discharging" ]; then
-        ${lib.optionalString (lowBattShow != null) ''
-      # Show the battery-empty frame, then let it render before we go.
-      ${lowBattShow} 2>/dev/null || true
-      sleep 3
-    ''}
-        ${pkgs.systemd}/bin/systemctl poweroff
-        exit 0
-      fi
-      sleep 30
-    done
+    if [ "$soc" -le ${toString cfg.lowSoc} ] && [ "$status" = "Discharging" ]; then
+      ${lib.optionalString (lowBattShow != null) ''
+        ${lowBattShow} 2>/dev/null && touch ${config.remarkable.eink.finalFrameMarker}
+      ''}
+      ${pkgs.systemd}/bin/systemctl poweroff
+    fi
   '';
 in {
   options.remarkable.power = {
@@ -79,20 +82,29 @@ in {
     offAfterSuspend = lib.mkOption {
       type = lib.types.nullOr lib.types.int;
       default = 12;
-      description = "Hours of unbroken suspend after which the device powers off cleanly (RTC-alarm wake; any other wake cancels it). Cold boot on next wake; the reader restores its saved position. null = stay suspended indefinitely.";
+      description = "Hours of unbroken suspend after which the device powers off cleanly (RTC-alarm wake; any other wake cancels it). Cold boot on next wake; the reader restores its saved position. null = no time limit. Either way, on battery the suspend also ends in a power-off once the charge is estimated to reach lowSoc (see standbyDrawMa).";
+    };
+    standbyDrawMa = lib.mkOption {
+      type = lib.types.ints.positive;
+      default = 15;
+      description = "Suspend current draw in mA used to estimate when a sleeping device reaches lowSoc (measured ~13.7 mA over long sleeps, ~15 mA in short cycles on chiappa). Higher is more conservative.";
     };
   };
 
   config = lib.mkIf cfg.enable (lib.mkMerge [
     {
-      systemd.services.remarkable-powerd = {
+      systemd.services.remarkable-battery-guard = {
         description = "battery guard";
         wantedBy = ["multi-user.target"];
+        startLimitIntervalSec = 0;
         serviceConfig = {
-          ExecStart = powerd;
-          Restart = "always";
+          Type = "oneshot";
+          ExecStart = batteryCheck;
         };
       };
+      services.udev.extraRules = ''
+        ACTION=="change", SUBSYSTEM=="power_supply", KERNEL=="${lib.concatStringsSep "|" ([device.battery.sysfsName] ++ lib.optional (device.charger.sysfsName != null) device.charger.sysfsName)}", RUN+="${pkgs.systemd}/bin/systemctl --no-block start remarkable-battery-guard.service"
+      '';
 
       # Power button: deep suspend + power-button wake both work (dmesg:
       # `PM: suspend entry (deep)` → press → `PM: Triggering wakeup` →
@@ -103,6 +115,8 @@ in {
       services.logind.settings.Login = {
         HandlePowerKey = lib.mkDefault "ignore";
         HandlePowerKeyLongPress = lib.mkDefault "poweroff";
+        HandleLidSwitch = lib.mkDefault "ignore";
+        HandleLidSwitchExternalPower = lib.mkDefault "ignore";
       };
 
       # Reader apps run as systemd services (no login session), so
@@ -180,9 +194,9 @@ in {
     # Long-standby power off: arm an RTC alarm at each suspend entry; at
     # resume, alarm armed + consumed + due = the timer woke us → clean
     # shutdown (zero standby draw); any other wake cancels the alarm.
-    (lib.mkIf (cfg.offAfterSuspend != null) {
+    {
       systemd.services.remarkable-suspend-offtimer = {
-        description = "power off after ${toString cfg.offAfterSuspend}h of suspend";
+        description = "power off after long or battery-draining suspend";
         wantedBy = ["sleep.target"];
         before = ["sleep.target"];
         unitConfig.StopWhenUnneeded = true;
@@ -191,8 +205,24 @@ in {
           RemainAfterExit = true;
         };
         script = ''
+          BAT=/sys/class/power_supply/${device.battery.sysfsName}
           echo 0 > /sys/class/rtc/rtc0/wakealarm 2>/dev/null || true
-          t=$(($(${pkgs.coreutils}/bin/date +%s) + ${toString (cfg.offAfterSuspend * 3600)}))
+          limit=${lib.optionalString (cfg.offAfterSuspend != null) (toString (cfg.offAfterSuspend * 3600))}
+          online=${
+            if device.charger.sysfsName != null
+            then ''$(cat /sys/class/power_supply/${device.charger.sysfsName}/online 2>/dev/null || echo 0)''
+            else "0"
+          }
+          now_uah=$(cat "$BAT/charge_now" 2>/dev/null || true)
+          full_uah=$(cat "$BAT/charge_full" 2>/dev/null || true)
+          if [ "$online" != 1 ] && [ -n "$now_uah" ] && [ -n "$full_uah" ]; then
+            avail=$((now_uah - full_uah * ${toString cfg.lowSoc} / 100))
+            secs=$((avail * 36 / (${toString cfg.standbyDrawMa} * 10)))
+            [ "$secs" -lt 60 ] && secs=60
+            if [ -z "$limit" ] || [ "$secs" -lt "$limit" ]; then limit=$secs; fi
+          fi
+          [ -n "$limit" ] || exit 0
+          t=$(($(${pkgs.coreutils}/bin/date +%s) + limit))
           if echo "$t" > /sys/class/rtc/rtc0/wakealarm 2>/dev/null; then
             echo "$t" > /run/suspend-offtimer
           fi
@@ -221,7 +251,7 @@ in {
           fi
         '';
       };
-    })
+    }
 
     # Devices whose interrupts must not pull the system out of deep suspend.
     # Applied by udev at add/change, so it survives a reboot with no service.

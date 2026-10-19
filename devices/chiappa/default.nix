@@ -36,6 +36,7 @@ in {
       rootA = "/dev/mmcblk0p2";
       rootB = "/dev/mmcblk0p3";
       persistPartlabel = "home";
+      persistDevice = "/dev/mmcblk0p4";
     };
 
     hardwareLayer = hardware-chiappa;

@@ -16,6 +16,8 @@ permissions:
 jobs:
   update:
     runs-on: ubuntu-24.04-arm
+    env:
+      KERNEL: .#nixosConfigurations.example-chiappa.config.boot.kernelPackages.kernel
     steps:
       - uses: actions/checkout@v7
       - uses: DeterminateSystems/nix-installer-action@v23
@@ -43,7 +45,7 @@ jobs:
 
       - id: lock
         run: |
-          kver() { nix eval --raw .#nixosConfigurations.example-chiappa.config.boot.kernelPackages.kernel.version; }
+          kver() { nix eval --raw "$KERNEL.version"; }
           before=$(kver)
           nix flake update
           after=$(kver)
@@ -61,26 +63,25 @@ jobs:
       - if: steps.lock.outputs.changed == 'true'
         run: nix eval --raw .#nixosConfigurations.example-chiappa.config.system.build.toplevel.drvPath
 
-      # Canary: the kernel follows nixpkgs' linux_latest, while chiappa's patch
-      # series is validated on one release. Apply the series to the new source
-      # in order and report what no longer applies, so a breaking bump is
-      # visible in the PR before anyone spends hours building it.
       - name: Kernel patch canary
         id: canary
         if: steps.lock.outputs.changed == 'true'
         run: |
-          src=$(nix build --no-link --print-out-paths .#nixosConfigurations.example-chiappa.config.boot.kernelPackages.kernel.src)
-          chiappa=$(nix eval --raw --impure --expr '(builtins.getFlake (toString ./.)).inputs.chiappa.outPath')
+          src=$(nix build --no-link --print-out-paths "$KERNEL.src")
           mkdir -p /tmp/k && tar -xf "$src" -C /tmp/k --strip-components=1
-          ok=0; failed=""
-          for p in "$chiappa"/kernel/0*.patch; do
-            if git -C /tmp/k apply --whitespace=nowarn "$p" 2>/tmp/apply.err; then
-              ok=$((ok + 1))
+          ok=0; total=0; failed=""; fuzzy=""
+          for p in $(nix eval --raw "$KERNEL.patches" --apply 'ps: builtins.concatStringsSep "\n" ps'); do
+            total=$((total + 1))
+            out=$(cd /tmp/k && patch -p1 -N --no-backup-if-mismatch < "$p" 2>&1) || true
+            if echo "$out" | grep -qE 'FAILED|can.t find file|hunks? ignored'; then
+              failed="$failed- $(basename "$p")"$'\n'"  $(echo "$out" | grep -m1 -E 'FAILED|can.t find file|ignored')"$'\n'
             else
-              failed="$failed- $(basename "$p")"$'\n'"  $(grep -m1 'error:' /tmp/apply.err | sed 's/^error: //')"$'\n'
+              ok=$((ok + 1))
+              if echo "$out" | grep -q 'fuzz'; then
+                fuzzy="$fuzzy- $(basename "$p"): $(echo "$out" | grep -c fuzz) hunk(s) with fuzz"$'\n'
+              fi
             fi
           done
-          total=$(ls "$chiappa"/kernel/0*.patch | wc -l)
           echo "ok=$ok" >> "$GITHUB_OUTPUT"
           echo "total=$total" >> "$GITHUB_OUTPUT"
           {
@@ -91,8 +92,36 @@ jobs:
               echo "$ok/$total patches apply to ${{ steps.lock.outputs.kernel_after }}; failing:"
               printf '%s' "$failed"
             fi
+            if [ -n "$fuzzy" ]; then
+              echo "applied with fuzz (verify placement):"
+              printf '%s' "$fuzzy"
+            fi
             echo 'EOF'
           } >> "$GITHUB_OUTPUT"
+
+      # `make oldconfig` silently drops options the new source no longer defines.
+      - name: Kernel config canary
+        id: config
+        if: steps.lock.outputs.changed == 'true'
+        run: |
+          cfg=$(nix build --no-link --print-out-paths "$KERNEL.configfile")
+          find /tmp/k -name 'Kconfig*' -print0 \
+            | xargs -0 grep -hoE '^[[:space:]]*(menu)?config[[:space:]]+[A-Z0-9_]+' \
+            | awk '{print $2}' | sort -u > /tmp/defined
+          grep -oE '^CONFIG_[A-Z0-9_]+=[ym]' "$cfg" | sed 's/^CONFIG_//; s/=.*//' | sort -u > /tmp/enabled
+          missing=$(comm -23 /tmp/enabled /tmp/defined)
+          if [ -z "$missing" ]; then
+            echo "report=every enabled option is still defined on ${{ steps.lock.outputs.kernel_after }}" >> "$GITHUB_OUTPUT"
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          else
+            {
+              echo 'report<<EOF'
+              echo "enabled options no longer defined on ${{ steps.lock.outputs.kernel_after }} (dropped silently by oldconfig; a failing patch's own symbols also land here):"
+              echo "$missing" | sed 's/^/- CONFIG_/'
+              echo 'EOF'
+            } >> "$GITHUB_OUTPUT"
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - if: steps.lock.outputs.changed == 'true'
         uses: peter-evans/create-pull-request@v8
@@ -100,7 +129,7 @@ jobs:
           branch: update/inputs
           delete-branch: true
           commit-message: "flake: update inputs (koreader ${{ steps.ko.outputs.after }}, kernel ${{ steps.lock.outputs.kernel_after }})"
-          title: "flake: update inputs (koreader ${{ steps.ko.outputs.after }}, kernel ${{ steps.lock.outputs.kernel_after }}${{ steps.canary.outputs.ok != steps.canary.outputs.total && ' — PATCHES FAIL' || '' }})"
+          title: "flake: update inputs (koreader ${{ steps.ko.outputs.after }}, kernel ${{ steps.lock.outputs.kernel_after }}${{ (steps.canary.outputs.ok != steps.canary.outputs.total || steps.config.outputs.ok == 'false') && ' — KERNEL CANARY FAILS' || '' }})"
           body: |
             Weekly input refresh.
 
@@ -108,10 +137,11 @@ jobs:
               (https://github.com/koreader/koreader/releases/tag/v${{ steps.ko.outputs.after }})
             - Kernel (nixpkgs `linux_latest`): **${{ steps.lock.outputs.kernel_before }} → ${{ steps.lock.outputs.kernel_after }}**
             - Patch canary: ${{ steps.canary.outputs.report }}
+            - Config canary: ${{ steps.config.outputs.report }}
             - `nix flake update` for nixpkgs and chiappa
 
             ```
             ${{ steps.lock.outputs.summary }}
             ```
 
-            The reference config evaluated on this runner; nothing was built or booted. A kernel bump needs a local build and a device test before merging; a failing canary needs chiappa's series rebased first.
+            The reference config evaluated on an arm64 runner; nothing was built or booted. A kernel bump needs a local build and a device test before merging; a failing canary needs chiappa's series rebased (or its config updated) first.

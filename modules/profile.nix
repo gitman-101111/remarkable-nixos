@@ -80,6 +80,11 @@ in {
         type = types.str;
         description = "GPT partlabel of the persistent data partition (referenced by partlabel, never fs label).";
       };
+      persistDevice = mkOption {
+        type = types.nullOr types.str;
+        default = null;
+        description = "Block device the persist partlabel must resolve to before stage 1 may format it. Guards layouts where the partlabel names someone else's data (the vendor layout's encrypted `home`). null = no check.";
+      };
     };
 
     lpgprPath = mkOption {
@@ -99,7 +104,7 @@ in {
 
     eink.vpddSysfsPath = mkOption {
       type = types.str;
-      description = "sysfs path of the EPD power regulator exposing vpdd_length (suspend interacts with its hold timer).";
+      description = "sysfs path of the EPD power regulator exposing vpdd_length (suspend interacts with its hold timer) and refresh_count (the lifecycle screens wait on it for a frame to land).";
     };
 
     battery.sysfsName = mkOption {

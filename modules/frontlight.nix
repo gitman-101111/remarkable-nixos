@@ -36,18 +36,17 @@ in {
     # Make the backlight writable by the video group so unprivileged apps can
     # set brightness. %k is the backlight name.
     services.udev.extraRules = ''
-      ACTION=="add", SUBSYSTEM=="backlight", KERNEL=="${device.frontlight.sysfsName}", RUN+="${pkgs.coreutils}/bin/chgrp video /sys/class/backlight/%k/brightness /sys/class/backlight/%k/bl_power", RUN+="${pkgs.coreutils}/bin/chmod g+w /sys/class/backlight/%k/brightness /sys/class/backlight/%k/bl_power"
+      ACTION=="add", SUBSYSTEM=="backlight", KERNEL=="${device.frontlight.sysfsName}", RUN+="${pkgs.coreutils}/bin/chgrp video /sys/class/backlight/%k/brightness /sys/class/backlight/%k/bl_power", RUN+="${pkgs.coreutils}/bin/chmod g+w /sys/class/backlight/%k/brightness /sys/class/backlight/%k/bl_power"${lib.optionalString (cfg.defaultBrightness != null) '', ENV{SYSTEMD_WANTS}+="remarkable-frontlight.service"''}
     '';
 
     systemd.services.remarkable-frontlight = lib.mkIf (cfg.defaultBrightness != null) {
       description = "front light default brightness";
-      wantedBy = ["multi-user.target"];
+      after = ["systemd-backlight@backlight:${device.frontlight.sysfsName}.service"];
+      restartIfChanged = false;
       serviceConfig = {
         Type = "oneshot";
         RemainAfterExit = true;
         ExecStart = pkgs.writeShellScript "remarkable-frontlight" ''
-          # The backlight device can appear after multi-user; wait for it.
-          for _ in $(seq 1 30); do [ -e ${node}/brightness ] && break; sleep 1; done
           ${lib.optionalString (device.frontlight.kernelModule != null) ''
             # Belt for the modprobe.d option (suspend blanking via
             # BL_CORE_SUSPENDRESUME).
